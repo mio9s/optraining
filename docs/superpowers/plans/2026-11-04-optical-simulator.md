@@ -74,9 +74,9 @@ test/*.test.js               core 各モジュールのテスト
   - `glass.js`: `WAVELENGTHS = [0.45, 0.52, 0.62]`; `LINES = {F:0.4861327, d:0.5875618, C:0.6562725}`; `refractiveIndex(material, lambdaUm) -> number`; `material` は `{type:'air'}` | `{type:'model', nd, vd}` | `{type:'preset', name}`; `listPresets() -> [{name, nd, vd}]`; `abbeFromPreset(name) -> {nd, vd}`
   - `glass-data.js`: `export const GLASS = { 'N-BK7': {B:[..3], C:[..3]}, ... }`(Sellmeier: n² = 1 + Σ Bᵢλ²/(λ² − Cᵢ))
 
-- [ ] **Step 1: `npm init -y`、`npm i -D esbuild uplot`、`package.json` に `"type":"module"`, `"test":"node --test test/"`, `"build":"node scripts/build.mjs"` を設定**
-- [ ] **Step 2: `scripts/import-glass.mjs` を書く** — GitHub `polyanskiy/refractiveindex.info-database` の固定コミットから `data-nk/glass/schott/` の N-BK7, N-SF11, N-SF5, N-SK16, N-F2, N-LAK9, N-BAF10 と `main/SiO2/Malitson`(石英)の YAML を取得し、`formula 2`(Sellmeier)係数を `glass-data.js` に書き出す。取得元コミット SHA とライセンス (CC0) をファイル先頭コメントに記録。実行して `glass-data.js` を生成。
-- [ ] **Step 3: 失敗するテストを書く** `test/glass.test.js`
+- [x] **Step 1: `npm init -y`、`npm i -D esbuild uplot`、`package.json` に `"type":"module"`, `"test":"node --test test/"`, `"build":"node scripts/build.mjs"` を設定**
+- [x] **Step 2: `scripts/import-glass.mjs` を書く** — GitHub `polyanskiy/refractiveindex.info-database` の固定コミットから `data-nk/glass/schott/` の N-BK7, N-SF11, N-SF5, N-SK16, N-F2, N-LAK9, N-BAF10 と `main/SiO2/Malitson`(石英)の YAML を取得し、`formula 2`(Sellmeier)係数を `glass-data.js` に書き出す。取得元コミット SHA とライセンス (CC0) をファイル先頭コメントに記録。実行して `glass-data.js` を生成。
+- [x] **Step 3: 失敗するテストを書く** `test/glass.test.js`
 
 ```js
 test('N-BK7 preset nd matches catalog', () => {
@@ -98,11 +98,11 @@ test('blue index > red index (normal dispersion)', () => {
 test('air is 1.0', () => assert.equal(refractiveIndex({type:'air'},0.52), 1));
 ```
 
-- [ ] **Step 4: `npm test` → FAIL(未定義)を確認**
-- [ ] **Step 5: `vec.js`, `glass.js` を実装** — モデルガラスは 2 項コーシー式 n(λ)=A+B/λ²、B=(nd−1)/vd / (1/λF² − 1/λC²)、A=nd − B/λd²。この式を設計書 §6 に追記(実装者判断の明記)。
-- [ ] **Step 6: `scripts/build.mjs` を書く** — esbuild で `src/ui/main.js` を IIFE バンドル(uPlot 含む)→ `src/index.html` の `<!--APP_JS-->` に `<script>` で、`styles.css` と `uplot/dist/uPlot.min.css` を `<!--APP_CSS-->` に `<style>` で埋め込み `dist/optraining.html` を書く。
-- [ ] **Step 7: `npm test` PASS、`npm run build` で `dist/optraining.html` が生成されることを確認**
-- [ ] **Step 8: Commit** `feat: scaffold build, vector math, glass dispersion`
+- [x] **Step 4: `npm test` → FAIL(未定義)を確認**
+- [x] **Step 5: `vec.js`, `glass.js` を実装** — モデルガラスは 2 項コーシー式 n(λ)=A+B/λ²、B=(nd−1)/vd / (1/λF² − 1/λC²)、A=nd − B/λd²。この式を設計書 §6 に追記(実装者判断の明記)。
+- [x] **Step 6: `scripts/build.mjs` を書く** — esbuild で `src/ui/main.js` を IIFE バンドル(uPlot 含む)→ `src/index.html` の `<!--APP_JS-->` に `<script>` で、`styles.css` と `uplot/dist/uPlot.min.css` を `<!--APP_CSS-->` に `<style>` で埋め込み `dist/optraining.html` を書く。
+- [x] **Step 7: `npm test` PASS、`npm run build` で `dist/optraining.html` が生成されることを確認**
+- [x] **Step 8: Commit** `feat: scaffold build, vector math, glass dispersion`
 
 ---
 
@@ -119,7 +119,7 @@ test('air is 1.0', () => assert.equal(refractiveIndex({type:'air'},0.52), 1));
   - `surfaceZ(sys) -> number[]`(各面の頂点 z。物体面 z = 0)
   - `defaultSystem() -> System`(物体距離 200 mm、BK7 両凸 + 空気間隔 + SF5 凹のアクロマート風 2 枚、アイリス、スクリーン)
 
-- [ ] **Step 1: 失敗するテスト**
+- [x] **Step 1: 失敗するテスト**
 
 ```js
 test('radius 0 is rejected', () => { /* row の radius=0 → errors に {row, field:'radius'} */ });
@@ -133,10 +133,10 @@ test('surfaceZ accumulates thicknesses', () => {
 test('defaultSystem validates', () => assert.ok(validateSystem(defaultSystem()).ok));
 ```
 
-- [ ] **Step 2: FAIL を確認** — Run `npm test`
-- [ ] **Step 3: 実装**
-- [ ] **Step 4: PASS を確認**
-- [ ] **Step 5: Commit** `feat: lens system model and validation`
+- [x] **Step 2: FAIL を確認** — Run `npm test`
+- [x] **Step 3: 実装**
+- [x] **Step 4: PASS を確認**
+- [x] **Step 5: Commit** `feat: lens system model and validation`
 
 ---
 
@@ -154,7 +154,7 @@ test('defaultSystem validates', () => assert.ok(validateSystem(defaultSystem()).
   - `fanRays(sys, objPoint:[x,y,z], lambda, nPupil) -> Ray[]` — 入射瞳を開口絞り(最小開口を制限する iris、なければ最初の面)の像としてではなく、**開口絞り面上の正方格子点を狙う** 反復(各光線の y,x 方向をニュートン 3 回で修正)で生成。`nPupil` は 1 方向の点数、円内のみ。
   - `findStop(sys) -> index`(近軸マージナル光線高/直径 比が最大の面)
 
-- [ ] **Step 1: 失敗するテスト**
+- [x] **Step 1: 失敗するテスト**
 
 ```js
 test('on-axis ray passes straight', ...);           // y=0, d=[0,0,1] → 全交点 x=y=0
@@ -170,10 +170,10 @@ test('iris at zero thickness acts as aperture', ...); // 直径 2mm iris, h=1.5 
 test('fanRays all hit stop inside its radius', ...);
 ```
 
-- [ ] **Step 2: FAIL を確認**
-- [ ] **Step 3: 実装** — 球面交点は頂点基準の二次方程式(数値安定形 `c/(-b∓√D)`)で、光線進行方向に近い根を選ぶ。法線は曲率中心向きを入射側に揃えてから `refract`。
-- [ ] **Step 4: PASS を確認**
-- [ ] **Step 5: Commit** `feat: 3D real ray tracing`
+- [x] **Step 2: FAIL を確認**
+- [x] **Step 3: 実装** — 球面交点は頂点基準の二次方程式(数値安定形 `c/(-b∓√D)`)で、光線進行方向に近い根を選ぶ。法線は曲率中心向きを入射側に揃えてから `refract`。
+- [x] **Step 4: PASS を確認**
+- [x] **Step 5: Commit** `feat: 3D real ray tracing`
 
 ---
 
@@ -187,7 +187,7 @@ test('fanRays all hit stop inside its radius', ...);
   - `paraxialTrace(sys, lambda) -> {efl, bfl, imageZ, magnification}`(y-nu 法)
   - `chromatic(sys) -> {longitudinal: {[lambda]: imageZ}, axialColor:number /*imageZ(0.45)-imageZ(0.62) mm*/, lateralColor:number /* 最大物体高での主光線像高 y(0.45)-y(0.62) mm, 実光線 */}`
 
-- [ ] **Step 1: 失敗するテスト**
+- [x] **Step 1: 失敗するテスト**
 
 ```js
 test('thin-lens limit matches 1/f = (n-1)(1/R1-1/R2)', ...);  // 0.1%
@@ -196,8 +196,8 @@ test('axial color non-zero for BK7 singlet', ...);             // > 0.5 mm (f=10
 test('lateral color is zero for on-axis object height 0', ...);
 ```
 
-- [ ] **Step 2–4: FAIL → 実装 → PASS**
-- [ ] **Step 5: Commit** `feat: paraxial analysis and chromatic aberration`
+- [x] **Step 2–4: FAIL → 実装 → PASS**
+- [x] **Step 5: Commit** `feat: paraxial analysis and chromatic aberration`
 
 ---
 
@@ -214,7 +214,7 @@ test('lateral color is zero for on-axis object height 0', ...);
   - `fitZernike(grid, n, jMax=37) -> number[]`(最小二乗、係数 [waves], index 0 は j=1)
   - この規約(Noll, RMS 規格化)を設計書 §6 に追記。
 
-- [ ] **Step 1: 失敗するテスト**
+- [x] **Step 1: 失敗するテスト**
 
 ```js
 test('Noll Z4 = sqrt(3)(2rho^2-1)', ...);
@@ -224,8 +224,8 @@ test('BK7 singlet on-axis: Z11 (spherical) dominant, coma ~0', ...);  // |c8|<1e
 test('off-axis object produces coma Z7/Z8', ...);  // |c8| > 0.01 waves
 ```
 
-- [ ] **Step 2–4: FAIL → 実装 → PASS**
-- [ ] **Step 5: Commit** `feat: wavefront OPD and Zernike decomposition`
+- [x] **Step 2–4: FAIL → 実装 → PASS**
+- [x] **Step 5: Commit** `feat: wavefront OPD and Zernike decomposition`
 
 ---
 
@@ -242,7 +242,7 @@ test('off-axis object produces coma Z7/Z8', ...);  // |c8| > 0.01 waves
   - `formImage(sys, objectImg:{data,size,width?}, opts:{fieldGrid=3}) -> {data:Float32Array(P*P*3), P, message?:string}` — P = `sys.screen.pixels`。各波長について: (a) 物体面を `fieldGrid×fieldGrid` のパッチに分け、パッチ中心ごとに PSF を計算(アイソプラナティック近似)、(b) 物体画素 → スクリーン座標は実主光線で写像(歪曲・倍率色収差を含む)、(c) 写像後の画像をパッチ PSF で畳み込み、隣接パッチは双線形重みでブレンド。RGB チャネルへ: 0.45→B, 0.52→G, 0.62→R。
   - 全光線が遮蔽 or 結果に NaN → 黒画像と `message:'像が形成されません(光線が遮蔽されています)'`。
 
-- [ ] **Step 1: 失敗するテスト**
+- [x] **Step 1: 失敗するテスト**
 
 ```js
 test('fft of delta is flat', ...);
@@ -255,8 +255,8 @@ test('no NaN in output for default system', ...);
 test('stopping down iris changes the image', ...);   // iris 直径変更で出力が変わる
 ```
 
-- [ ] **Step 2–4: FAIL → 実装 → PASS**
-- [ ] **Step 5: Commit** `feat: FFT, PSF and image formation`
+- [x] **Step 2–4: FAIL → 実装 → PASS**
+- [x] **Step 5: Commit** `feat: FFT, PSF and image formation`
 
 ---
 
@@ -270,7 +270,7 @@ test('stopping down iris changes the image', ...);   // iris 直径変更で出�
   - `traceGhosts(sys, ray, minIntensity=1e-6) -> [{surfaces:[i,j], points, intensity, alive}]` — 全ての面ペア (j<i) について i で反射→j で反射→スクリーンへの 2 回反射経路を追跡。
   - `ghostImage(sys, objectImg, opts) -> Float32Array`(ゴースト光を `formImage` と同サイズで、幾何的にスプラット)
 
-- [ ] **Step 1: 失敗するテスト**
+- [x] **Step 1: 失敗するテスト**
 
 ```js
 test('normal incidence R = ((n1-n2)/(n1+n2))^2', ...); // 1→1.5 で 0.04
@@ -281,8 +281,8 @@ test('singlet has exactly one ghost pair (2,1)', ...); // 面 2 反射→面 1 �
 test('ghost intensity ~ R1*R2*T^2', ...);
 ```
 
-- [ ] **Step 2–4: FAIL → 実装 → PASS**
-- [ ] **Step 5: Commit** `feat: Fresnel reflection and ghost tracing`
+- [x] **Step 2–4: FAIL → 実装 → PASS**
+- [x] **Step 5: Commit** `feat: Fresnel reflection and ghost tracing`
 
 ---
 
@@ -301,7 +301,7 @@ test('ghost intensity ~ R1*R2*T^2', ...);
   - `ramanAntiStokesRatio(lambdaUm, shiftCm1, tempK=293) -> number`(ボルツマン因子 × (ν_as/ν_s)⁴)
   - `SCATTER_DEFAULTS = {glass:{rayleighCoef:…, ramanShift:465 /*SiO2 主ピーク cm⁻¹*/, ramanCoef:1e-6}, surface:{sigmaNm:2}, medium:{particleUm:1.0, nParticle:1.33, density:0 /* /mm³ 霧オフ*/}}`
 
-- [ ] **Step 1: 失敗するテスト**
+- [x] **Step 1: 失敗するテスト**
 
 ```js
 test('Rayleigh cross-section scales as lambda^-4', ...); // σ(0.45)/σ(0.62) = (0.62/0.45)^4
@@ -316,8 +316,8 @@ test('Raman 520nm with 465cm-1 → stokes ≈ 0.5328 µm', ...);
 test('anti-Stokes weaker than Stokes at room temperature', ...);
 ```
 
-- [ ] **Step 2–4: FAIL → 実装 → PASS**
-- [ ] **Step 5: Commit** `feat: Rayleigh, Mie, HG, surface scatter and Raman models`
+- [x] **Step 2–4: FAIL → 実装 → PASS**
+- [x] **Step 5: Commit** `feat: Rayleigh, Mie, HG, surface scatter and Raman models`
 
 ---
 
@@ -331,7 +331,7 @@ test('anti-Stokes weaker than Stokes at room temperature', ...);
   - `strayLight(sys, objectImg, scatterCfg, opts:{rays=20000, seed=1}) -> {image:Float32Array(P*P*3), raman:{stokes:Float32Array, antiStokes:Float32Array, wavelengths:{…}}, budget:{transmitted, ghost, glassScatter, surfaceScatter, mediumScatter, backscatter}}` — モンテカルロ: 物体輝度に比例して光線を発生し、(1) 各ガラス区間で距離 × 散乱係数による確率で散乱(位相関数 HG/Rayleigh)、ラマン確率で波長変換、(2) 各面で TIS の確率で散乱(Lambert 近似の角度分布)、(3) 空間区間で粒子密度 × Mie Csca で散乱(Mie S11 を表引きでサンプル)。後方へ散乱した光線は `budget.backscatter` に計上。スクリーン到達光線をビン詰め。シード付き乱数 (mulberry32) で再現性を持たせる。
   - `composeImage(direct, ghost, stray, weights) -> Float32Array`(0..1 クランプ、トーンマップは線形)
 
-- [ ] **Step 1: 失敗するテスト**
+- [x] **Step 1: 失敗するテスト**
 
 ```js
 test('zero scatter coefficients → stray image all zero', ...);
@@ -341,8 +341,8 @@ test('Raman image is produced at stokes wavelength', ...);
 test('same seed gives identical result', ...);
 ```
 
-- [ ] **Step 2–4: FAIL → 実装 → PASS**
-- [ ] **Step 5: Commit** `feat: stray light Monte Carlo with ghosts, scatter and Raman`
+- [x] **Step 2–4: FAIL → 実装 → PASS**
+- [x] **Step 5: Commit** `feat: stray light Monte Carlo with ghosts, scatter and Raman`
 
 ---
 
@@ -360,10 +360,10 @@ test('same seed gives identical result', ...);
   - `downscaleImage(imageData, max=512) -> {data:Float32Array, size}`(アスペクト維持で正方形にパディング)
   - 再計算は入力から 200 ms デバウンス。重い計算(結像・迷光)は「結像を計算」ボタンで実行し、実行中は進捗表示。
 
-- [ ] **Step 1: `downscaleImage` のテスト** — 4000×3000 入力 → size ≤ 512、アスペクト維持。FAIL を確認後に実装 → PASS
-- [ ] **Step 2: エディタ・断面図・画像表示・解析パネルを実装**
-- [ ] **Step 3: `npm run build` → 内蔵ブラウザで `dist/optraining.html` を開き、コンソールエラー 0 を確認**
-- [ ] **Step 4: Commit** `feat: UI (editor, layout, imaging, analysis panels)`
+- [x] **Step 1: `downscaleImage` のテスト** — 4000×3000 入力 → size ≤ 512、アスペクト維持。FAIL を確認後に実装 → PASS
+- [x] **Step 2: エディタ・断面図・画像表示・解析パネルを実装**
+- [x] **Step 3: `npm run build` → 内蔵ブラウザで `dist/optraining.html` を開き、コンソールエラー 0 を確認**
+- [x] **Step 4: Commit** `feat: UI (editor, layout, imaging, analysis panels)`
 
 ---
 
@@ -371,12 +371,12 @@ test('same seed gives identical result', ...);
 
 **Files:** Create `README.md`(使い方・物理モデルと規約・ガラスデータ出典/ライセンス); Modify 設計書の状態を「実装済み」に
 
-- [ ] **Step 1: ブラウザで受け入れ基準(設計書 §8)を順に確認し、各結果のスクリーンショットを取る**
+- [x] **Step 1: ブラウザで受け入れ基準(設計書 §8)を順に確認し、各結果のスクリーンショットを取る**
   - BK7 平凸の焦点距離が理論値と一致
   - 単レンズで球面収差・色収差が表示される
   - 全波長同一屈折率で色収差 0
   - アイリスを絞ると断面図・結像画像が変化
   - 画像読込で倒立像
   - Review Focus 1–5 の各入力で破綻しない
-- [ ] **Step 2: `npm test` 全 PASS、`npm run build` 成功**
-- [ ] **Step 3: Commit & push** `docs: README; build dist/optraining.html` → `git push`
+- [x] **Step 2: `npm test` 全 PASS、`npm run build` 成功**
+- [x] **Step 3: Commit & push** `docs: README; build dist/optraining.html` → `git push`
