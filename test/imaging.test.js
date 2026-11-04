@@ -68,3 +68,20 @@ test('screen far from focus still gives finite image', () => {
   const r = formImage(s, makePattern('arrow', 32), { fieldGrid: 1, nPupil: 12 });
   assert.ok(r.data.every(Number.isFinite));
 });
+
+test('uniform object stays uniform under heavy defocus (no truncation/tiling artifacts)', () => {
+  const white = { data: new Float32Array(64 * 64 * 3).fill(1), size: 64 };
+  const a = small(); a.object.height = 30; // 物体はスクリーンより十分大きい
+  const b = small(); b.object.height = 30; b.surfaces[5].thickness = 150; // 大きく焦点外
+  const ra = formImage(a, white, { fieldGrid: 3, nPupil: 12 });
+  const rb = formImage(b, white, { fieldGrid: 3, nPupil: 12 });
+  const P = 64, c = (r, x, y) => r.data[(y * P + x) * 3 + 1];
+  // 中央の照度は同程度(スクリーンが遠いぶん主光線の写像が拡大し、やや暗くなる)
+  const ratio = c(rb, 32, 32) / c(ra, 32, 32);
+  assert.ok(ratio > 0.3 && ratio < 1.5, String(ratio));
+  // 一様性: 中央 32×32 の変動係数が小さい
+  let s = 0, s2 = 0, n = 0;
+  for (let y = 16; y < 48; y++) for (let x = 16; x < 48; x++) { const v = c(rb, x, y); s += v; s2 += v * v; n++; }
+  const mean = s / n, cv = Math.sqrt(s2 / n - mean * mean) / mean;
+  assert.ok(cv < 0.05, `cv=${cv}`);
+});

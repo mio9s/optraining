@@ -90,6 +90,20 @@ function maxSlope(coef, grid, n) {
   return mx;
 }
 
+function boxBlur(a, m, b) {
+  // 累積和による分離型の箱平均(端は有効画素数で割らず、エネルギー比率は最後の正規化で保たれる)
+  const h = Math.floor(b / 2), n = 2 * h + 1;
+  const line = new Float64Array(m + 1), tmp = new Float64Array(m * m);
+  for (let y = 0; y < m; y++) {
+    for (let x = 0; x < m; x++) line[x + 1] = line[x] + a[y * m + x];
+    for (let x = 0; x < m; x++) tmp[y * m + x] = (line[Math.min(m, x + h + 1)] - line[Math.max(0, x - h)]) / n;
+  }
+  for (let x = 0; x < m; x++) {
+    for (let y = 0; y < m; y++) line[y + 1] = line[y] + tmp[y * m + x];
+    for (let y = 0; y < m; y++) a[y * m + x] = (line[Math.min(m, y + h + 1)] - line[Math.max(0, y - h)]) / n;
+  }
+}
+
 function convolve2(a, ma, b, mb) {
   const m = ma + mb - 1, out = new Float64Array(m * m);
   for (let ay = 0; ay < ma; ay++) for (let ax = 0; ax < ma; ax++) {
@@ -121,10 +135,17 @@ export function psf(wf, lambda, pupilDiamMm, imageDistMm, pixelMm, opts = {}) {
   const hg = Math.min((maxM - 1) / 2, Math.ceil(rmax / pixelMm) + 1);
   const mg = 2 * hg + 1;
   const hist = new Float64Array(mg * mg);
+  // 双線形で割り振り、さらに瞳格子のスポット間隔ぶん箱平均(離散サンプリングの縞を消す)
   for (const [x, y] of wf.spots) {
-    const ox = Math.round(x / pixelMm) + hg, oy = Math.round(-y / pixelMm) + hg;
-    if (ox >= 0 && oy >= 0 && ox < mg && oy < mg) hist[oy * mg + ox] += 1;
+    const fx = x / pixelMm + hg, fy = -y / pixelMm + hg;
+    const x0 = Math.floor(fx), y0 = Math.floor(fy), ax = fx - x0, ay = fy - y0;
+    for (const [dx, dy, wgt] of [[0, 0, (1 - ax) * (1 - ay)], [1, 0, ax * (1 - ay)], [0, 1, (1 - ax) * ay], [1, 1, ax * ay]]) {
+      const ox = x0 + dx, oy = y0 + dy;
+      if (ox >= 0 && oy >= 0 && ox < mg && oy < mg) hist[oy * mg + ox] += wgt;
+    }
   }
+  const box = Math.round((2 * rmax) / (wf.n * pixelMm));
+  if (box >= 2) boxBlur(hist, mg, box);
   const airy = resample(diffractionFine(wf.grid, wf.n, null, 64, lambdaMm, pupilDiamMm, imageDistMm), pixelMm, 31);
   let { out, m } = convolve2(hist, mg, airy.out, airy.m);
   if (m > maxM) { // 中央を切り出し

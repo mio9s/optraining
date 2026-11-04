@@ -42,13 +42,13 @@ table.lde { border-collapse: collapse; width: 100%; font-variant-numeric: tabula
 table.lde th { text-align: left; font-weight: 600; font-size: 12px; padding: 4px; border-bottom: 1px solid var(--line); white-space: nowrap; cursor: help; }
 table.lde th small { display: block; font-weight: 400; color: var(--muted); }
 table.lde td { padding: 3px 3px; border-bottom: 1px solid var(--line); vertical-align: top; }
-table.lde td input[type=text] { width: 72px; text-align: right; }
-table.lde td.kind select { width: 94px; }
-table.lde td input.small { width: 64px; }
+table.lde td input[type=text] { width: 68px; text-align: right; }
+table.lde td.kind select { width: 90px; }
+table.lde td input.small { width: 56px; }
 table.lde td.na { color: var(--muted); text-align: center; }
 table.lde td.idx { color: var(--muted); text-align: right; }
 table.lde td.kind.fixed { font-weight: 600; padding-top: 6px; }
-table.lde td.mat select { width: 104px; }
+table.lde td.mat select { width: 100px; }
 table.lde td.mat .sub { font-size: 11px; color: var(--muted); white-space: nowrap; }
 table.lde .model { display: flex; gap: 6px; margin-top: 3px; }
 table.lde .model label { font-size: 11px; color: var(--muted); }

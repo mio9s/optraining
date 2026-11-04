@@ -13,6 +13,8 @@ import { fft2d, nextPow2 } from './fft.js';
 import { fresnelT } from './fresnel.js';
 
 export const NA_REF = 0.1;
+const MAX_KERNEL = 513; // PSF カーネルの最大画素数(一辺)
+const MAX_MARGIN = 192; // 幾何像の余白(画素)
 const MSG_BLACK = '像が形成されません(光線が遮蔽されています)';
 
 /** 波長 → RGB チャネル(最も近い代表波長: B 0.45, G 0.52, R 0.62) */
@@ -109,19 +111,23 @@ function sampleBilinear(img, ch, u, v) {
   return (1 - ay) * ((1 - ax) * p(x0, y0) + ax * p(x1, y0)) + ay * ((1 - ax) * p(x0, y1) + ax * p(x1, y1));
 }
 
-/** 幾何像(PSF なし): Float64Array(P*P) */
-export function geometricImage(sys, objectImg, lambda, map = radialMap(sys, lambda)) {
+/**
+ * 幾何像(PSF なし): Float64Array(Pe*Pe)、Pe = P + 2·margin。
+ * margin はスクリーン外側の余白画素(PSF の裾でスクリーン内に入り込む光のため)。
+ */
+export function geometricImage(sys, objectImg, lambda, map = radialMap(sys, lambda), margin = 0) {
   const P = sys.screen.pixels, w = sys.screen.width, pitch = w / P, h = sys.object.height;
-  const out = new Float64Array(P * P);
+  const Pe = P + 2 * margin;
+  const out = new Float64Array(Pe * Pe);
   const ch = channelOf(lambda);
-  for (let iy = 0; iy < P; iy++) for (let ix = 0; ix < P; ix++) {
-    const X = (ix + 0.5) * pitch - w / 2, Y = w / 2 - (iy + 0.5) * pitch;
+  for (let iy = 0; iy < Pe; iy++) for (let ix = 0; ix < Pe; ix++) {
+    const X = (ix - margin + 0.5) * pitch - w / 2, Y = w / 2 - (iy - margin + 0.5) * pitch;
     const o = inverseMap(map, X, Y);
     if (!o) continue;
     const Wt = interp(map.r, map.W, o[2]);
     if (!(Wt > 0)) continue;
     const u = ((o[0] + h) / (2 * h)) * objectImg.size - 0.5, v = ((h - o[1]) / (2 * h)) * objectImg.size - 0.5;
-    out[iy * P + ix] = sampleBilinear(objectImg, ch, u, v) * Wt;
+    out[iy * Pe + ix] = sampleBilinear(objectImg, ch, u, v) * Wt;
   }
   return out;
 }
@@ -137,7 +143,44 @@ function kernelFFT(k, m, N) {
 }
 
 /**
- * 結像画像。opts: {fieldGrid=3, nPupil=24, onProgress(frac)}
+ * 余白付き幾何像 geo (Pe×Pe, 余白 mg) を、G×G パッチの PSF で畳み込み、双線形の重みで混ぜる。
+ * 各パッチは重みが正になる領域だけをタイル FFT で計算する。返り値 Float64Array(P*P)。
+ */
+function convolvePatched(geo, Pe, mg, kernels, P, G) {
+  const acc = new Float64Array(P * P);
+  const cell = P / G;
+  for (let gy = 0; gy < G; gy++) for (let gx = 0; gx < G; gx++) {
+    const kk = kernels[gy * G + gx];
+    const hm = (kk.m - 1) / 2;
+    const y0 = G === 1 ? 0 : Math.max(0, Math.floor((gy - 0.5) * cell)), y1 = G === 1 ? P : Math.min(P, Math.ceil((gy + 1.5) * cell));
+    const x0 = G === 1 ? 0 : Math.max(0, Math.floor((gx - 0.5) * cell)), x1 = G === 1 ? P : Math.min(P, Math.ceil((gx + 1.5) * cell));
+    const tx0 = Math.max(0, x0 + mg - hm), ty0 = Math.max(0, y0 + mg - hm), tx1 = Math.min(Pe, x1 + mg + hm), ty1 = Math.min(Pe, y1 + mg + hm);
+    const tw = tx1 - tx0, th = ty1 - ty0;
+    const N = nextPow2(Math.max(tw, th) + kk.m);
+    const re = new Float64Array(N * N), im = new Float64Array(N * N);
+    for (let y = 0; y < th; y++) for (let x = 0; x < tw; x++) re[y * N + x] = geo[(y + ty0) * Pe + x + tx0];
+    fft2d(re, im, N);
+    const [kr, ki] = kernelFFT(kk.data, kk.m, N);
+    for (let i = 0; i < N * N; i++) { const a = re[i], b = im[i]; re[i] = a * kr[i] - b * ki[i]; im[i] = a * ki[i] + b * kr[i]; }
+    fft2d(re, im, N, true);
+    for (let y = y0; y < y1; y++) {
+      const fy = Math.max(0, Math.min(G - 1, (y + 0.5) / cell - 0.5));
+      const wy = G === 1 ? 1 : Math.max(0, 1 - Math.abs(fy - gy));
+      if (!wy) continue;
+      for (let x = x0; x < x1; x++) {
+        const fx = Math.max(0, Math.min(G - 1, (x + 0.5) / cell - 0.5));
+        const wx = G === 1 ? 1 : Math.max(0, 1 - Math.abs(fx - gx));
+        if (wx) acc[y * P + x] += wx * wy * re[(y + mg - ty0) * N + (x + mg - tx0)];
+      }
+    }
+  }
+  return acc;
+}
+
+const COARSE_LIMIT = 129; // これより大きい PSF は粗い格子で畳み込む(大きなボケに細部はない)
+
+/**
+ * 結像画像。opts: {fieldGrid=3, nPupil=24, fresnel=true, onProgress(frac)}
  * 返り値: {data: Float32Array(P*P*3), P, peak, psfs, message?}
  */
 export function formImage(sys, objectImg, opts = {}) {
@@ -150,12 +193,9 @@ export function formImage(sys, objectImg, opts = {}) {
   for (const lambda of sys.wavelengths) {
     const ch = channelOf(lambda);
     const map = radialMap(sys, lambda, 33, { fresnel: opts.fresnel });
-    const geo = geometricImage(sys, objectImg, lambda, map);
-    let any = false;
-    for (const v of geo) if (v > 0) { any = true; break; }
-    if (!any) { step += G * G; continue; }
-    // パッチごとの PSF
-    const kernels = [];
+    if (!map.W.some((v) => v > 0)) { step += G * G; continue; } // 全遮蔽
+    // パッチ中心の波面
+    const wfs = [];
     for (let gy = 0; gy < G; gy++) for (let gx = 0; gx < G; gx++) {
       const X = -w / 2 + ((gx + 0.5) * w) / G, Y = w / 2 - ((gy + 0.5) * w) / G;
       let o = inverseMap(map, X, Y);
@@ -163,43 +203,60 @@ export function formImage(sys, objectImg, opts = {}) {
         const R = Math.hypot(X, Y) || 1, s = Math.sign(map.m0) || -1;
         o = [(s * X * map.rMax) / R, (s * Y * map.rMax) / R, map.rMax];
       }
-      const wf = wavefront(sys, [o[0], o[1], 0], lambda, nPupil);
-      const p = wf.chief ? psf(wf, lambda, wf.pupilDiamMm, wf.chief.Rref, pitch, { maxM: Math.min(129, 2 * Math.floor(P / 2) + 1) }) : null;
-      const k = p ?? { data: Float32Array.of(1), m: 1, mode: 'none' };
-      kernels.push(k);
-      psfs.push({ lambda, gx, gy, obj: [o[0], o[1]], psf: p, rmsWaves: wf.rmsWaves });
+      wfs.push({ wf: wavefront(sys, [o[0], o[1], 0], lambda, nPupil), gx, gy, o });
       opts.onProgress?.(++step / steps);
     }
-    const acc = new Float64Array(P * P);
-    const cell = P / G;
-    for (let gy = 0; gy < G; gy++) for (let gx = 0; gx < G; gx++) {
-      const kk = kernels[gy * G + gx];
-      const hm = (kk.m - 1) / 2;
-      // このパッチの重みが正になる出力領域 [x0,x1)×[y0,y1)
-      const y0 = G === 1 ? 0 : Math.max(0, Math.floor((gy - 0.5) * cell)), y1 = G === 1 ? P : Math.min(P, Math.ceil((gy + 1.5) * cell));
-      const x0 = G === 1 ? 0 : Math.max(0, Math.floor((gx - 0.5) * cell)), x1 = G === 1 ? P : Math.min(P, Math.ceil((gx + 1.5) * cell));
-      // 入力タイル(畳み込みの裾ぶん拡張)
-      const tx0 = Math.max(0, x0 - hm), ty0 = Math.max(0, y0 - hm), tx1 = Math.min(P, x1 + hm), ty1 = Math.min(P, y1 + hm);
-      const tw = tx1 - tx0, th = ty1 - ty0;
-      const N = nextPow2(Math.max(tw, th) + kk.m);
-      const re = new Float64Array(N * N), im = new Float64Array(N * N);
-      for (let y = 0; y < th; y++) for (let x = 0; x < tw; x++) re[y * N + x] = geo[(y + ty0) * P + x + tx0];
-      fft2d(re, im, N);
-      const [kr, ki] = kernelFFT(kk.data, kk.m, N);
-      for (let i = 0; i < N * N; i++) { const a = re[i], b = im[i]; re[i] = a * kr[i] - b * ki[i]; im[i] = a * ki[i] + b * kr[i]; }
-      fft2d(re, im, N, true);
-      for (let y = y0; y < y1; y++) {
-        const fy = Math.max(0, Math.min(G - 1, (y + 0.5) / cell - 0.5));
-        const wy = G === 1 ? 1 : Math.max(0, 1 - Math.abs(fy - gy));
-        if (!wy) continue;
-        for (let x = x0; x < x1; x++) {
-          const fx = Math.max(0, Math.min(G - 1, (x + 0.5) / cell - 0.5));
-          const wx = G === 1 ? 1 : Math.max(0, 1 - Math.abs(fx - gx));
-          if (wx) acc[y * P + x] += wx * wy * re[(y - ty0) * N + (x - tx0)];
+    const kernelsAt = (px, maxM) => wfs.map(({ wf }) => (wf.chief ? psf(wf, lambda, wf.pupilDiamMm, wf.chief.Rref, px, { maxM }) : null));
+    // 実光線スポットの広がりから PSF の大きさを見積もり、粗い格子を使うか先に決める
+    const spotPx = Math.max(1, ...wfs.map(({ wf }) => {
+      let r = 0; for (const [x, y] of wf.spots ?? []) r = Math.max(r, Math.hypot(x, y));
+      return Math.min(MAX_KERNEL, 2 * Math.ceil(r / pitch) + 3);
+    }));
+    const delta = { data: Float32Array.of(1), m: 1 };
+    let ps;
+    const record = () => wfs.forEach(({ wf, gx, gy, o }, i) => psfs.push({ lambda, gx, gy, obj: [o[0], o[1]], psf: ps[i], rmsWaves: wf.rmsWaves }));
+    if (spotPx <= COARSE_LIMIT) {
+      ps = kernelsAt(pitch, Math.min(MAX_KERNEL, 2 * P + 1));
+      record();
+      const maxM = Math.max(...ps.map((p) => p?.m ?? 1));
+      const kernels = ps.map((p) => p ?? delta);
+      const mg = Math.min(MAX_MARGIN, (maxM - 1) / 2);
+      const geo = geometricImage(sys, objectImg, lambda, map, mg);
+      const acc = convolvePatched(geo, P + 2 * mg, mg, kernels, P, G);
+      for (let i = 0; i < P * P; i++) out[i * 3 + ch] += Math.max(0, acc[i]);
+    } else {
+      // 粗い格子: 画素を s 倍にして畳み込み、双線形補間で元の格子へ戻す
+      const s = Math.ceil(spotPx / COARSE_LIMIT);
+      const Pc = Math.ceil(P / s), pc = pitch * s, wc = Pc * pc;
+      ps = kernelsAt(pc, Math.min(COARSE_LIMIT + 4, 2 * Pc + 1));
+      record();
+      const kernels = ps.map((p) => p ?? delta);
+      const mg = Math.min(MAX_MARGIN, Math.max(...kernels.map((k) => (k.m - 1) / 2)));
+      // 粗い格子の幾何像は細かい格子で求めてから箱平均(細部のエネルギーを保存)
+      const fineMg = mg * s + Math.ceil((wc - w) / pitch / 2);
+      const geoF = geometricImage({ ...sys, screen: { width: w, pixels: P } }, objectImg, lambda, map, fineMg);
+      const PeF = P + 2 * fineMg, Pe = Pc + 2 * mg;
+      const geo = new Float64Array(Pe * Pe);
+      const off = fineMg - mg * s - Math.round((wc - w) / pitch / 2); // 粗格子の原点に対応する細格子位置
+      for (let y = 0; y < Pe; y++) for (let x = 0; x < Pe; x++) {
+        let sum = 0;
+        for (let dy = 0; dy < s; dy++) for (let dx = 0; dx < s; dx++) {
+          const fy = off + y * s + dy, fx = off + x * s + dx;
+          if (fy >= 0 && fx >= 0 && fy < PeF && fx < PeF) sum += geoF[fy * PeF + fx];
         }
+        geo[y * Pe + x] = sum / (s * s);
+      }
+      const acc = convolvePatched(geo, Pe, mg, kernels, Pc, G);
+      for (let iy = 0; iy < P; iy++) for (let ix = 0; ix < P; ix++) {
+        const X = (ix + 0.5) * pitch - w / 2, Y = w / 2 - (iy + 0.5) * pitch;
+        const u = (X + wc / 2) / pc - 0.5, v = (wc / 2 - Y) / pc - 0.5;
+        const x0 = Math.max(0, Math.min(Pc - 1, Math.floor(u))), y0 = Math.max(0, Math.min(Pc - 1, Math.floor(v)));
+        const x1 = Math.min(Pc - 1, x0 + 1), y1 = Math.min(Pc - 1, y0 + 1);
+        const ax = Math.max(0, Math.min(1, u - x0)), ay = Math.max(0, Math.min(1, v - y0));
+        const val = (1 - ay) * ((1 - ax) * acc[y0 * Pc + x0] + ax * acc[y0 * Pc + x1]) + ay * ((1 - ax) * acc[y1 * Pc + x0] + ax * acc[y1 * Pc + x1]);
+        out[(iy * P + ix) * 3 + ch] += Math.max(0, val);
       }
     }
-    for (let i = 0; i < P * P; i++) out[i * 3 + ch] += Math.max(0, acc[i]);
   }
   let peak = 0, bad = false;
   for (const v of out) { if (!Number.isFinite(v)) bad = true; else if (v > peak) peak = v; }
