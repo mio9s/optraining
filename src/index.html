@@ -8,7 +8,11 @@
 </head>
 <body>
 <header class="top">
-  <h1>optraining <span>光線追跡・結像・収差シミュレーター</span></h1>
+  <h1>optraining <span>光線追跡・結像・収差・外観シミュレーター</span></h1>
+  <nav class="viewtabs" role="tablist" aria-label="画面の切り替え">
+    <button type="button" role="tab" data-view="imaging" aria-selected="true">結像・収差</button>
+    <button type="button" role="tab" data-view="appearance" aria-selected="false">外観(界面の見え方)</button>
+  </nav>
   <div class="top-actions">
     <label class="field inline">サンプル系 <select id="sample"></select></label>
     <button type="button" id="btn-focus" title="スクリーンを近軸像面(520 nm)へ移動します">スクリーンを像面へ合わせる</button>
@@ -18,7 +22,7 @@
   </div>
 </header>
 
-<main class="layout">
+<main class="layout" id="view-imaging">
   <section class="panel" id="left" aria-labelledby="h-lde">
     <h2 id="h-lde">① レンズデータ <small>(光は左 → 右へ進みます)</small></h2>
     <div id="editor"></div>
@@ -87,6 +91,75 @@
   </section>
 </main>
 
+
+<main class="layout ap-layout" id="view-appearance" hidden>
+  <section class="panel" id="ap-left">
+    <h2>① 部品 <small>(回転体。断面を光軸まわりに回転させた立体)</small></h2>
+    <div class="row">
+      <button type="button" id="ap-regen" title="結像タブのレンズデータから、コバ付きの部品を作り直します">レンズデータから作り直す</button>
+      <label class="check" title="空気中のアイリスを黒い板として置く"><input type="checkbox" id="ap-iris"> アイリス板</label>
+      <label class="check" title="黒アルマイトの円筒で全体を囲む"><input type="checkbox" id="ap-barrel"> 鏡筒</label>
+    </div>
+    <div class="row">
+      <button type="button" id="ap-draw">断面を描いて追加…</button>
+      <label class="file" title="SVG・DXF・CSV(r, z の点列)から断面を取り込みます">取り込み(SVG / DXF / CSV)…<input type="file" id="ap-file" accept=".svg,.dxf,.csv,.txt,image/svg+xml"></label>
+    </div>
+    <p class="warn" id="ap-warn"></p>
+    <div id="ap-parts"></div>
+    <p class="errors" id="ap-errors"></p>
+    <h3 class="sub">断面図(全部品)</h3>
+    <canvas id="ap-section" aria-label="部品の断面図"></canvas>
+    <p class="hint">青 = ガラス、橙 = nd・νd 指定の媒質(オイル・樹脂など)、灰 = 不透明。上半分を回転させて立体にします。</p>
+  </section>
+
+  <section class="panel" id="ap-center">
+    <div class="panel-head">
+      <h2>② 外観</h2>
+      <div class="tools">
+        <label class="field inline">背景・照明 <select id="ap-env"></select></label>
+        <label class="field inline">解像度 <select id="ap-res"><option value="s">320×240</option><option value="m">640×480</option><option value="l">960×720</option></select></label>
+      </div>
+    </div>
+    <canvas id="ap-canvas" aria-label="レンズの外観" tabindex="0"></canvas>
+    <div class="ap-statusbar"><span id="ap-status">準備中…</span><span class="muted">ドラッグで回転、ホイールで拡大縮小</span></div>
+    <div class="imgctl">
+      <label class="field inline" title="レンズを見る方向。0° = 物体側(正面)から、90° = 真横から"><span>方位</span><input type="text" id="ap-cam-azimuth" class="num"><small>°</small></label>
+      <label class="field inline" title="上下の角度"><span>仰角</span><input type="text" id="ap-cam-elevation" class="num"><small>°</small></label>
+      <label class="field inline" title="注視点からカメラまでの距離"><span>距離</span><input type="text" id="ap-cam-distance" class="num"><small>mm</small></label>
+      <label class="field inline" title="カメラの画角"><span>画角</span><input type="text" id="ap-cam-fov" class="num"><small>°</small></label>
+      <button type="button" id="ap-cam-reset" class="secondary">視点を戻す</button>
+      <button type="button" id="ap-sheet">角度一覧…</button>
+    </div>
+    <div class="imgctl">
+      <label class="check" title="画像の上をドラッグして線を引くと、その線に沿った明るさから境界が見えるか判定します"><input type="checkbox" id="ap-line"> 線を引いて境界を判定</label>
+      <label class="check"><input type="checkbox" id="ap-auto" checked> 自動露出</label>
+      <label class="field inline">露出 <input type="range" id="ap-exposure" min="-6" max="6" step="0.1" value="0"><output id="ap-exposure-out">×1</output></label>
+    </div>
+    <fieldset>
+      <legend>光源の追加</legend>
+      <button type="button" id="ap-add-point">点光源</button>
+      <button type="button" id="ap-add-rect">面光源(蛍光灯)</button>
+      <div id="ap-lights"></div>
+    </fieldset>
+  </section>
+
+  <section class="panel" id="ap-right">
+    <h2>③ 数値</h2>
+    <h3 class="sub">境界の見え方の判定</h3>
+    <label class="field inline" title="人の目が明るさの違いを見分けられる目安(ウェーバー比)。広い一様な面で約 1〜2 %、細い線ではより大きい"><span>識別の閾値</span><input type="text" id="ap-threshold" class="num"><small>%</small></label>
+    <div id="ap-verdict" class="ap-verdict"><p class="note">「線を引いて境界を判定」をオンにして、画像の境界をまたぐように線を引いてください。</p></div>
+    <div id="ap-profile" class="chart"></div>
+    <h3 class="sub">界面ごとの寄与</h3>
+    <table class="kv" id="ap-contrib"></table>
+    <h3 class="sub">界面の反射率</h3>
+    <label class="field inline"><span>界面</span><select id="ap-face"></select></label>
+    <label class="field inline" title="波長グラフの入射角"><span>入射角</span><input type="text" id="ap-angle" class="num" value="0"><small>°</small></label>
+    <div id="ap-refl"></div>
+    <p class="note">判定は「線上の背景(中央値)から最も外れた点」のウェーバーコントラストによる簡易的な目安です。実際の見え方は照明・背景・観察距離で変わります。</p>
+  </section>
+</main>
+<dialog id="ap-dialog" class="ap-dialog"></dialog>
+<dialog id="pe-dialog" class="pe-dialog"></dialog>
 <dialog id="help">
   <h2>使い方</h2>
   <ol>
@@ -97,6 +170,7 @@
     <li><b>② 断面図</b>は入力に合わせて自動更新されます。青 450 nm / 緑 520 nm / 赤 620 nm。</li>
     <li><b>③ 結像</b>: パターンを選ぶか画像を読み込み、「結像を計算」を押します。PSF(回折または幾何)を畳み込んだ像、ゴースト、散乱光、ラマン光を合成表示します。</li>
     <li>右側のタブで色収差、ゼルニケ係数、散乱の各公式、散乱の設定を確認・変更できます。</li>
+    <li><b>外観タブ</b>: 部品(レンズ・オイル層・鏡筒など)を色々な角度から見た画像を描き、界面の反射が境界として見えるかを確かめます。部品の断面は自動生成のほか、描画・SVG / DXF / CSV 取り込みで作れます。</li>
     <li>編集内容はこのブラウザに自動保存され、次回開いたときに復元されます。「保存」で JSON ファイルに書き出し、「読込…」で戻せます。</li>
   </ol>
   <p class="note">単位: 長さ mm、波長 µm(表示は nm)。座標: 光軸 +z(右)、+y(上)。曲率半径は曲率中心が +z 側で正。</p>

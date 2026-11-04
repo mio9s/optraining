@@ -177,8 +177,9 @@ export function renderTile(sceneCache, job) {
     const ju = job.pass === 0 ? 0.5 : rand(), jv = job.pass === 0 ? 0.5 : rand();
     const u = ((px + ju) / job.width) * 2 - 1, v = 1 - ((py + jv) / job.height) * 2;
     const ray = primaryRay(cb, u, v, aspect);
+    // 波長は 16 帯の中心を巡回(16 パスごとに全画素が同じ波長の組を通るので、灰色の背景で色・輝度ノイズが出ない)
     const bin = (job.pass + ((px * 7 + py * 13) % nBins)) % nBins;
-    const lam = sampleLambda(bin, nBins, rand());
+    const lam = sampleLambda(bin, nBins, 0.5);
     const pc = {};
     const ctx = { scene, env: job.env, lights: job.lights, rand, contrib: pc };
     const L = radiance(ctx, ray.o, ray.d, lam, 0, null, 1);

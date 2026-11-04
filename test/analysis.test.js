@@ -22,14 +22,22 @@ test('line profile samples bilinearly along the line', () => {
 });
 test('boundary contrast and verdict', () => {
   const flat = new Array(50).fill(0.5);
-  const line = [...flat]; line[25] = 0.53; // +6 %
+  // 3 画素幅の境界(平滑化しても値が保たれる)
+  const line = [...flat]; line[24] = line[25] = line[26] = 0.53; // +6 %
   const c = boundaryContrast(line);
-  assert.ok(Math.abs(c.contrast - 0.06) < 1e-9 && c.visible && c.index === 25);
-  const faint = [...flat]; faint[20] = 0.505; // +1 %
+  assert.ok(Math.abs(c.contrast - 0.06) < 1e-9 && c.visible && c.index === 25, JSON.stringify(c));
+  const faint = [...flat]; faint[19] = faint[20] = faint[21] = 0.505; // +1 %
   assert.ok(!boundaryContrast(faint).visible);
   assert.ok(boundaryContrast(faint, 0.005).visible);
-  const dark = [...flat]; dark[30] = 0.45; // −10 %(暗い線)
+  const dark = [...flat]; dark[29] = dark[30] = dark[31] = 0.45; // −10 %(暗い線)
   assert.ok(boundaryContrast(dark).contrast < -0.09);
+});
+test('noise-only profile is not judged visible', () => {
+  let seed = 3; const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  const noisy = Array.from({ length: 200 }, () => 0.5 * (1 + 0.04 * (rnd() - 0.5) * 2)); // ±4 % の白色ノイズ
+  const c = boundaryContrast(noisy);
+  assert.notEqual(c.verdict, 'visible');
+  assert.ok(c.noise > 0.005);
 });
 test('contribution table sorted with fractions', () => {
   const t = contributionTable({ a: 1, b: 3, c: 0 }, 8, { a: 'A' });

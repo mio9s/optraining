@@ -8,10 +8,11 @@ const read = (p) => readFileSync(new URL(p, root), 'utf8');
 const common = { bundle: true, format: 'iife', minify: true, target: 'es2022', write: false, charset: 'ascii', legalComments: 'none' };
 
 const worker = await build({ ...common, entryPoints: [new URL('src/ui/worker.js', root).pathname] });
+const appearWorker = await build({ ...common, entryPoints: [new URL('src/appearance/worker.js', root).pathname] });
 const main = await build({
   ...common,
   entryPoints: [new URL('src/ui/main.js', root).pathname],
-  define: { __WORKER_SRC__: JSON.stringify(worker.outputFiles[0].text) },
+  define: { __WORKER_SRC__: JSON.stringify(worker.outputFiles[0].text), __APPEAR_WORKER_SRC__: JSON.stringify(appearWorker.outputFiles[0].text) },
 });
 const js = main.outputFiles[0].text.replace(/<\/script/gi, '<\\/script');
 const uplotLicense = '/*! uPlot (c) Leon Sorokin, MIT License https://github.com/leeoniya/uPlot */';

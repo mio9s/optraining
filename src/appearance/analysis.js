@@ -40,13 +40,22 @@ const median = (a) => { const s = [...a].sort((x, y) => x - y), m = s.length >> 
  * 境界のウェーバーコントラスト: 背景 = 断面の中央値、境界 = 背景から最も外れた点(両端の 10 % は除く)。
  * C = (L_境界 − L_背景) / L_背景。判定は |C| ≥ threshold(既定 2 %)で「見える」
  */
-export function boundaryContrast(values, threshold = 0.02) {
+export function boundaryContrast(raw, threshold = 0.02) {
+  // 3 点移動平均で画素ノイズを抑える(境界は数画素の幅を持つ)
+  const values = raw.map((v, i) => (raw[Math.max(0, i - 1)] + v + raw[Math.min(raw.length - 1, i + 1)]) / 3);
   const n = values.length, lo = Math.floor(n * 0.1), hi = Math.ceil(n * 0.9);
   const bg = median(values);
   let k = lo, dev = 0;
   for (let i = lo; i < hi; i++) { const v = Math.abs(values[i] - bg); if (v > dev) { dev = v; k = i; } }
   const C = bg > 1e-9 ? (values[k] - bg) / bg : values[k] > 1e-9 ? Infinity : 0;
-  return { background: bg, peak: values[k], index: k, contrast: C, visible: Math.abs(C) >= threshold, threshold };
+  // ノイズ: 隣り合う生の値の差の中央値から推定した標準偏差(平滑化後)
+  const diffs = []; for (let i = 1; i < raw.length; i++) diffs.push(Math.abs(raw[i] - raw[i - 1]));
+  const sigma = diffs.length ? (1.4826 * median(diffs)) / Math.SQRT2 / Math.sqrt(3) : 0;
+  const noise = bg > 1e-9 ? sigma / bg : 0;
+  const aboveNoise = dev > 4 * sigma;
+  const exceeds = Math.abs(C) >= threshold;
+  const verdict = exceeds && aboveNoise ? 'visible' : exceeds ? 'uncertain' : 'invisible';
+  return { background: bg, peak: values[k], index: k, contrast: C, noise, visible: verdict === 'visible', verdict, threshold };
 }
 
 /** 寄与(Y の和)を割合の表に。names: key → 表示名 */

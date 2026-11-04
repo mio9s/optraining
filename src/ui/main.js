@@ -8,6 +8,7 @@ import { createLayoutView, layoutData, WL_COLOR } from './layout-view.js';
 import { drawLinearImage, loadImageFile } from './image-view.js';
 import { renderChromatic, renderZernike, renderScatterPanels } from './analysis-view.js';
 import { computeAll } from './worker.js';
+import { initAppearance, defaultAppearance } from './appearance/app.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -43,6 +44,7 @@ function scheduleAnalysis() {
   timer = setTimeout(runAnalysis, 200);
 }
 const STORE_KEY = 'optraining.system.v1';
+const AP_KEY = 'optraining.appearance.v1';
 const toJSON = (sys) => JSON.stringify(sys, (k, v) => (v === Infinity ? 'inf' : v === -Infinity ? '-inf' : v), 1);
 const fromJSON = (text) => JSON.parse(text, (k, v) => (v === 'inf' ? Infinity : v === '-inf' ? -Infinity : v));
 function saveLocal() {
@@ -282,7 +284,7 @@ $('btn-focus').addEventListener('click', () => {
   loadSystem(focusScreen(state.sys, 0.52), { edited: true });
 });
 $('btn-save').addEventListener('click', () => {
-  const blob = new Blob([toJSON(state.valid)], { type: 'application/json' });
+  const blob = new Blob([toJSON({ format: 'optraining', version: 2, system: state.valid, appearance: appearanceState })], { type: 'application/json' });
   const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: 'optraining-system.json' });
   document.body.append(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
@@ -292,7 +294,11 @@ $('file-sys').addEventListener('change', async () => {
   $('file-sys').value = '';
   if (!f) return;
   try {
-    const sys = fromJSON(await f.text());
+    const obj = fromJSON(await f.text());
+    // 旧形式(レンズデータのみ)と新形式 {system, appearance} の両方を受け付ける
+    const sys = obj.surfaces ? obj : obj.system;
+    if (!sys) throw new Error('optraining のファイルではありません');
+    if (obj.appearance) { Object.assign(appearanceState, defaultAppearance(), obj.appearance); saveAppearance(); appearance.reload(); }
     const v = validateSystem(sys);
     if (!v.ok) throw new Error(v.errors.map((e) => `行 ${e.row}: ${e.message}`).join('\n'));
     loadSystem(sys, { edited: true });
@@ -339,6 +345,21 @@ document.querySelectorAll('[role=tab]').forEach((b) => b.addEventListener('click
 
 renderScatterPanels($('tab-scatter'));
 renderSettings();
+// ---------- 外観タブ ----------
+const appearanceState = (() => {
+  try { const v = fromJSON(localStorage.getItem(AP_KEY) ?? 'null'); if (v) return { ...defaultAppearance(), ...v }; } catch { /* */ }
+  return defaultAppearance();
+})();
+function saveAppearance() { try { localStorage.setItem(AP_KEY, toJSON(appearanceState)); } catch { /* */ } }
+const appearance = initAppearance({ getSystem: () => state.valid, getState: () => appearanceState, setState: () => saveAppearance() });
+document.querySelectorAll('.viewtabs [role=tab]').forEach((b) => b.addEventListener('click', () => {
+  document.querySelectorAll('.viewtabs [role=tab]').forEach((x) => x.setAttribute('aria-selected', String(x === b)));
+  $('view-imaging').hidden = b.dataset.view !== 'imaging';
+  $('view-appearance').hidden = b.dataset.view !== 'appearance';
+  for (const id of ['btn-focus', 'sample']) $(id).closest('label, button').hidden = b.dataset.view !== 'imaging';
+  if (b.dataset.view === 'appearance') appearance.show(); else runAnalysis(true);
+}));
+
 // 前回の状態を復元
 state.sampleKey = 'achromat';
 try {
