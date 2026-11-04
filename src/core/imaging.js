@@ -3,13 +3,14 @@
 // スクリーン: 一辺 sys.screen.width、P×P 画素、行 0 = +y。
 // 照度モデル: E = L · V(r) · cos⁴θ · J(r) · (NA/NA_REF)²
 //   V: ケラレ(瞳光線の生存率), θ: 物体側主光線角, J: 歪曲による面積比(中心で 1), NA: 像側近軸 NA。
-//   NA_REF = 0.1(F/5 相当)で露出 1。
+//   T: 各面のフレネル透過率の積(無コート、主光線で評価)。NA_REF = 0.1(F/5 相当)で露出 1。
 import { surfaceZ } from './system.js';
 import { aimRay, traceRay, findStop, fanRays } from './trace.js';
 import { ynuTrace } from './ynu.js';
 import { wavefront } from './wavefront.js';
 import { psf } from './psf.js';
 import { fft2d, nextPow2 } from './fft.js';
+import { fresnelT } from './fresnel.js';
 
 export const NA_REF = 0.1;
 const MSG_BLACK = '像が形成されません(光線が遮蔽されています)';
@@ -38,16 +39,18 @@ export function imageNA(sys, lambda) {
 }
 
 /** 半径方向の写像表: r_obj → 主光線像高 g(符号付き)・照度係数 W */
-export function radialMap(sys, lambda, K = 33) {
+export function radialMap(sys, lambda, K = 33, opts = {}) {
   const h = sys.object.height;
   const rMax = Math.max(h * Math.SQRT2, 1e-6);
   const stop = findStop(sys, lambda);
-  const r = [], g = [], V = [], c4 = [];
+  const r = [], g = [], V = [], c4 = [], T = [];
+  const fres = opts.fresnel === false ? undefined : fresnelT;
   for (let k = 0; k < K; k++) {
     const ro = (rMax * k) / (K - 1);
     const obj = [0, ro, 0];
     const chief = aimRay(sys, obj, lambda, 0, 0, stop);
-    const t = traceRay(sys, chief, { ignoreApertures: true });
+    const t = traceRay(sys, chief, { ignoreApertures: true, fresnel: fres });
+    T.push(t.alive ? t.final.intensity : 0);
     const gy = t.alive ? t.points[t.points.length - 1][1] : NaN;
     const fan = fanRays(sys, obj, lambda, 8);
     const alive = fan.filter((f) => traceRay(sys, f).alive).length;
@@ -65,8 +68,8 @@ export function radialMap(sys, lambda, K = 33) {
     return Number.isFinite(ratio) && ratio > 0 ? ratio : 0;
   });
   const exp = (imageNA(sys, lambda) / NA_REF) ** 2;
-  const W = r.map((_, k) => (Number.isFinite(g[k]) ? V[k] * c4[k] * J[k] * exp : 0));
-  return { r, g, W, m0, rMax };
+  const W = r.map((_, k) => (Number.isFinite(g[k]) ? V[k] * c4[k] * J[k] * T[k] * exp : 0));
+  return { r, g, W, V, T, m0, rMax, exposure: exp };
 }
 
 function interp(xs, ys, x) {
@@ -146,7 +149,7 @@ export function formImage(sys, objectImg, opts = {}) {
   let step = 0;
   for (const lambda of sys.wavelengths) {
     const ch = channelOf(lambda);
-    const map = radialMap(sys, lambda);
+    const map = radialMap(sys, lambda, 33, { fresnel: opts.fresnel });
     const geo = geometricImage(sys, objectImg, lambda, map);
     let any = false;
     for (const v of geo) if (v > 0) { any = true; break; }
