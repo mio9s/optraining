@@ -4,7 +4,9 @@
 
 ## 使い方
 
-`dist/optraining.html` をブラウザ(Chrome / Edge / Firefox / Safari の最新版)で開くだけです。インストールやネット接続は不要です。
+**Web 版: https://mio9s.github.io/optraining/** (インストール不要、誰でもアクセス可)
+
+または `dist/optraining.html` をダウンロードしてブラウザ(Chrome / Edge / Firefox / Safari の最新版)で開くだけです。インストールやネット接続は不要です。
 
 1. **① レンズデータ**: 1 行 = 1 面。先頭が物体面、末尾がスクリーン。「＋」で挿入、「✕」で削除、「↑↓」で並べ替え。
    - 曲率半径: 曲率中心が右(+z)側なら正、平面は `inf`。厚み: 次の面までの距離。材質: その面の右側の媒質。
