@@ -64,10 +64,10 @@ export function defaultSystem() {
     surfaces: [
       { kind: 'object', radius: Infinity, thickness: 200, material: air, diameter: 20 },
       { kind: 'iris', radius: Infinity, thickness: 3, material: air, diameter: 12 },
-      { kind: 'surface', radius: 33.0, thickness: 5, material: { type: 'preset', name: 'N-BK7' }, diameter: 20 },
-      { kind: 'surface', radius: -27.0, thickness: 0.5, material: air, diameter: 20 },
-      { kind: 'surface', radius: -26.5, thickness: 2, material: { type: 'preset', name: 'N-SF5' }, diameter: 20 },
-      { kind: 'surface', radius: -140.0, thickness: DEFAULT_BACK, material: air, diameter: 20 },
+      { kind: 'surface', radius: 25.75, thickness: 5, material: { type: 'preset', name: 'N-BK7' }, diameter: 20 },
+      { kind: 'surface', radius: -25.75, thickness: 0.5, material: air, diameter: 20 },
+      { kind: 'surface', radius: -25.75, thickness: 2, material: { type: 'preset', name: 'N-SF5' }, diameter: 20 },
+      { kind: 'surface', radius: -128.54, thickness: DEFAULT_BACK, material: air, diameter: 20 },
       { kind: 'screen', radius: Infinity, thickness: 0, material: air, diameter: 20 },
     ],
     object: { height: 10 },
@@ -75,5 +75,6 @@ export function defaultSystem() {
     wavelengths: [...WAVELENGTHS],
   };
 }
-// 既定系の後側距離(近軸像面、d 線付近)。Task 4 の paraxialTrace で決定した値。
-const DEFAULT_BACK = 60;
+// 既定系: 薄肉色消し条件で設計した BK7/SF5 アクロマート(f≈51 mm, 0.45/0.62 µm で縦色収差を相殺)。
+// 後側距離は paraxialTrace(0.52 µm) の近軸像位置。
+const DEFAULT_BACK = 62.80;
