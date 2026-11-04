@@ -41,7 +41,8 @@ test('fog density increases veil and backscatter', () => {
   assert.ok(b.budget.transmitted < a.budget.transmitted);
 });
 test('Raman image is produced at stokes wavelength', () => {
-  const r = strayLight(sys(), makePattern('arrow', 32), { ...zero, glass: { scatterCoef: 0, ramanCoef: 1e-3, ramanShift: 465 } }, { rays: 3000 });
+  const s = sys(); s.screen.width = 40; // ラマン光はほぼ等方的なので広いスクリーンで受ける
+  const r = strayLight(s, makePattern('arrow', 32), { ...zero, glass: { scatterCoef: 0, ramanCoef: 1e-3, ramanShift: 465 } }, { rays: 3000 });
   assert.ok(sum(r.raman.stokes) > 0);
   // 反ストークス/ストークス比 ≈ q(室温で約 0.12)
   const q = r.raman.total.antiStokes / r.raman.total.stokes;

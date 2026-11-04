@@ -8,19 +8,30 @@ const EPS_T = -1e-6;
 
 /**
  * 頂点 z=zVertex、曲率半径 radius の球面(Infinity は平面)と光線 p + t d の交点パラメータ t。
- * 頂点側(近軸で連続する)根を数値安定形で選ぶ。交差しなければ null。
+ * 球は 2 点で交わるので、頂点側の半球(cv·(z − zVertex) < 1、レンズ面として使う側)にあり、
+ * かつ前方 (t > −1e-9) にある根のうち最小のものを返す。交差しなければ null。
+ * 根は桁落ちを避ける形 t₁ = C/q, t₂ = q/A(q = −(B + sign(B)√D))で求める。
  */
 export function intersectSphere(p, d, zVertex, radius) {
   const cv = Number.isFinite(radius) ? 1 / radius : 0;
   const q = [p[0], p[1], p[2] - zVertex];
+  // cv·t² + 2B·t + C = 0
   const B = cv * dot(q, d) - d[2];
   const C = cv * dot(q, q) - 2 * q[2];
   const D = B * B - cv * C;
   if (D < 0) return null;
-  const den = B + (B >= 0 ? 1 : -1) * Math.sqrt(D);
-  if (den === 0) return null;
-  const t = -C / den;
-  return Number.isFinite(t) ? t : null;
+  const qq = -(B + (B >= 0 ? 1 : -1) * Math.sqrt(D));
+  const roots = [];
+  if (qq !== 0) roots.push(C / qq);
+  if (cv !== 0 && qq !== 0) roots.push(qq / cv);
+  let best = null;
+  for (const t of roots) {
+    if (!Number.isFinite(t) || t < -1e-9) continue;
+    const zl = q[2] + t * d[2];
+    if (cv * zl >= 1) continue; // 曲率中心より向こう側(反対の半球)
+    if (best === null || t < best) best = t;
+  }
+  return best;
 }
 
 /** 面上の点 P(頂点基準座標系)での単位法線(おおむね +z 向き) */
