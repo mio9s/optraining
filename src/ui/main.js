@@ -366,7 +366,6 @@ function setMode(mode, first = false) {
   document.body.dataset.mode = mode;
   $('view-imaging').hidden = mode !== 'imaging';
   $('view-appearance').hidden = mode !== 'appearance';
-  for (const id of ['btn-focus', 'sample']) $(id).closest('label, button').hidden = mode !== 'imaging';
   const [name, desc, flow] = MODE_TEXT[mode];
   $('modebar').innerHTML = `<b>いまのモード: ${name}</b><span>${desc}</span><span>${flow}</span>`;
   document.title = `${name} — optraining`;

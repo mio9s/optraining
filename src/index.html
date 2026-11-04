@@ -14,8 +14,6 @@
     <button type="button" role="tab" data-view="appearance" aria-selected="false"><b>外観モード</b><small>レンズを外から見た界面の見え方</small></button>
   </nav>
   <div class="top-actions">
-    <label class="field inline">サンプル系 <select id="sample"></select></label>
-    <button type="button" id="btn-focus" title="スクリーンを近軸像面(520 nm)へ移動します">スクリーンを像面へ合わせる</button>
     <button type="button" id="btn-save" class="secondary" title="レンズデータを JSON ファイルに保存します(編集内容はこのブラウザにも自動保存されます)">保存</button>
     <label class="file secondary-file" title="保存した JSON ファイルからレンズデータを読み込みます">読込…<input type="file" id="file-sys" accept=".json,application/json"></label>
     <button type="button" id="btn-help" class="secondary">使い方</button>
@@ -26,6 +24,10 @@
 <main class="layout" id="view-imaging">
   <section class="panel" id="left" aria-labelledby="h-lde">
     <h2 id="h-lde">① レンズデータ <small>(光は左 → 右へ進みます)</small></h2>
+    <div class="row lde-tools">
+      <label class="field inline">サンプル系 <select id="sample"></select></label>
+      <button type="button" id="btn-focus" title="スクリーンを近軸像面(520 nm)へ移動します">スクリーンを像面へ合わせる</button>
+    </div>
     <div id="editor"></div>
     <p class="hint">曲率半径: 曲率中心が右側なら正・左側なら負、平面は <code>inf</code>。厚み: 次の面までの距離。材質: その面の右側の媒質。</p>
     <fieldset class="sysfields">
@@ -118,7 +120,7 @@
       <h2>② 外観</h2>
       <div class="tools">
         <label class="field inline">背景・照明 <select id="ap-env"></select></label>
-        <label class="field inline" title="標準: 4 パスで仕上げ(色は 1 パス目から正確)。高品質: 32 パスでノイズとギザギザを減らす。正確: 波長ごとに光路を分けて分散まで厳密に(遅い)">品質 <select id="ap-quality"><option value="standard">標準(速い)</option><option value="high">高品質</option><option value="exact">正確(分散を厳密に)</option></select></label>
+        <label class="field inline" title="標準: 4 パスで仕上げ(色は 1 パス目から正確)。高品質: 32 パスでノイズとギザギザを減らす(格子など細かい模様を見るとき)。正確: 波長ごとに光路を分けて分散まで厳密に(遅い)">品質 <select id="ap-quality"><option value="standard">標準(速い)</option><option value="high">高品質</option><option value="exact">正確(分散を厳密に)</option></select></label>
         <label class="field inline">解像度 <select id="ap-res"><option value="s">320×240</option><option value="m">640×480</option><option value="l">960×720</option></select></label>
       </div>
     </div>
@@ -160,7 +162,7 @@
     <label class="field inline"><span>界面</span><select id="ap-face"></select></label>
     <label class="field inline" title="波長グラフの入射角"><span>入射角</span><input type="text" id="ap-angle" class="num" value="0"><small>°</small></label>
     <div id="ap-refl"></div>
-    <p class="note">判定は「線上の背景(中央値)から最も外れた点」のウェーバーコントラストによる簡易的な目安です。実際の見え方は照明・背景・観察距離で変わります。</p>
+    <p class="note">判定は「線上の背景(なだらかな明るさの傾きを直線で近似)から最も外れた点」のウェーバーコントラストによる簡易的な目安で、画像ノイズと区別できない差は「判定できません」とします。実際の見え方は照明・背景・観察距離で変わります。</p>
   </section>
 </main>
 <dialog id="ap-dialog" class="ap-dialog"></dialog>

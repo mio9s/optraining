@@ -18,7 +18,10 @@ code { font-family: ui-monospace, Menlo, Consolas, monospace; background: var(--
 h1 { font-size: 17px; margin: 0; } h1 span { font-weight: 400; color: var(--muted); font-size: 13px; margin-left: 6px; }
 h2 { font-size: 14px; margin: 0 0 8px; } h2 small { font-weight: 400; color: var(--muted); }
 h4 { margin: 14px 0 4px; font-size: 12px; color: var(--muted); }
-.top { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.top { display: grid; grid-template-columns: 1fr auto 1fr; gap: 10px; align-items: center; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.top h1 { justify-self: start; }
+.top .top-actions { justify-self: end; }
+@media (max-width: 1100px) { .top { grid-template-columns: 1fr; justify-items: center; } .top h1, .top .top-actions { justify-self: center; } }
 .top-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .layout { display: grid; grid-template-columns: minmax(600px, 1.1fr) minmax(440px, 1.25fr) minmax(360px, 0.95fr); gap: 12px; padding: 12px; align-items: start; }
 @media (max-width: 1450px) { .layout { grid-template-columns: minmax(600px, 1fr) minmax(420px, 1fr); } #right { grid-column: 1 / -1; } }
@@ -199,3 +202,17 @@ body[data-mode=appearance] { --mode: var(--mode-appearance); }
 .modebar b { font-size: 15px; }
 .modebar span { opacity: 0.9; }
 .panel h2 { border-left: 4px solid var(--mode); padding-left: 8px; }
+
+/* モード帯は常に 1 行の高さ(切り替えで下の画面が上下しないように) */
+.modebar { min-height: 34px; }
+@media (min-width: 1100px) { .modebar { flex-wrap: nowrap; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } }
+.lde-tools { margin-bottom: 8px; }
+.lde-tools select { max-width: 300px; }
+/* 数値パネルのはみ出し防止 */
+#ap-right, #ap-left, #ap-center { min-width: 0; overflow-wrap: anywhere; }
+#ap-contrib { table-layout: fixed; width: 100%; }
+#ap-contrib td:last-child { width: 78px; white-space: nowrap; }
+#ap-contrib td:first-child { white-space: normal; }
+#ap-face { max-width: 100%; }
+#ap-right label.field { max-width: 100%; }
+#ap-right label.field.inline { display: flex; width: 100%; } #ap-right label.field.inline span { white-space: nowrap; } #ap-right label.field.inline select { flex: 1; min-width: 0; }

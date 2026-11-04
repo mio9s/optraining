@@ -45,3 +45,11 @@ test('contribution table sorted with fractions', () => {
   assert.equal(t[1].name, 'A');
   assert.ok(Math.abs(t[0].fraction - 0.375) < 1e-12);
 });
+
+test('smooth background gradient is not a boundary; a line on a gradient is', () => {
+  const grad = Array.from({ length: 200 }, (_, i) => 0.23 - (0.01 * i) / 199); // 0.23 → 0.22(±2.3 %)
+  assert.equal(boundaryContrast(grad).verdict, 'invisible');
+  const withLine = [...grad]; for (const i of [99, 100, 101]) withLine[i] *= 1.05;
+  const c = boundaryContrast(withLine);
+  assert.equal(c.verdict, 'visible'); assert.ok(Math.abs(c.contrast - 0.05) < 0.005, String(c.contrast));
+});

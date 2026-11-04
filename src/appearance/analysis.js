@@ -44,9 +44,17 @@ export function boundaryContrast(raw, threshold = 0.02) {
   // 3 点移動平均で画素ノイズを抑える(境界は数画素の幅を持つ)
   const values = raw.map((v, i) => (raw[Math.max(0, i - 1)] + v + raw[Math.min(raw.length - 1, i + 1)]) / 3);
   const n = values.length, lo = Math.floor(n * 0.1), hi = Math.ceil(n * 0.9);
-  const bg = median(values);
+  // 背景 = なだらかな明るさの傾き(照明のグラデーションなど)。外れ値に強い直線(Theil–Sen 推定)で表し、
+  // そこからの局所的なずれを境界とみなす
+  const slopes = [];
+  const step = Math.max(1, Math.floor(n / 60));
+  for (let i = 0; i < n; i += step) for (let j = i + step * 4; j < n; j += step) slopes.push((values[j] - values[i]) / (j - i));
+  const slope = slopes.length ? median(slopes) : 0;
+  const icept = median(values.map((v, i) => v - slope * i));
+  const trend = (i) => icept + slope * i;
   let k = lo, dev = 0;
-  for (let i = lo; i < hi; i++) { const v = Math.abs(values[i] - bg); if (v > dev) { dev = v; k = i; } }
+  for (let i = lo; i < hi; i++) { const v = Math.abs(values[i] - trend(i)); if (v > dev) { dev = v; k = i; } }
+  const bg = trend(k);
   const C = bg > 1e-9 ? (values[k] - bg) / bg : values[k] > 1e-9 ? Infinity : 0;
   // ノイズ: 隣り合う生の値の差の中央値から推定した標準偏差(平滑化後)
   const diffs = []; for (let i = 1; i < raw.length; i++) diffs.push(Math.abs(raw[i] - raw[i - 1]));

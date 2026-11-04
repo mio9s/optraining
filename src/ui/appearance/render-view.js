@@ -137,20 +137,28 @@ export function createRenderView(canvas, pool, cb = {}) {
     const ex = drawBuffer(canvas, buf, { exposure, auto, line: buf.w === state.width ? line : null, scale: 1 });
     cb.onExposure?.(ex);
   };
-  let previewBusy = false, previewPending = false;
-  /** ドラッグ中のプレビュー: 前のフレームが終わるまで次を出さず、最新の視点だけを描く */
+  let previewBusy = false, previewPending = false, fullStarted = false;
+  /**
+   * ドラッグ中のプレビュー: 前のフレームが終わるまで次を出さず、最新の視点だけを描く。
+   * 全解像度の描画が始まったら(手を離した後)、遅れて来たプレビューは出さない(全解像度を取り消さないため)。
+   */
   async function preview() {
+    fullStarted = false;
     if (previewBusy) { previewPending = true; return; }
     previewBusy = true;
-    do { previewPending = false; await restart(true); } while (previewPending);
-    previewBusy = false;
+    try {
+      do { previewPending = false; if (fullStarted) break; await restart(true); } while (previewPending && !fullStarted);
+    } finally { previewBusy = false; }
   }
   async function restart(lowRes) {
     if (!state) return;
+    if (!lowRes) fullStarted = true;
+    else if (fullStarted) return;
     const tag = ++gen;
     pool.cancel(tag - 1);
     const s = lowRes ? 3 : 1;
     const w = Math.max(16, Math.round(state.width / s)), h = Math.max(12, Math.round(state.height / s));
+    if (!lowRes) cb.onProgress?.(0, maxPasses, false); // 描き直しを始めたことをすぐ表示
     try {
       const b = await renderStill(pool, { ...state, width: w, height: h }, lowRes ? 1 : maxPasses, tag, (bb) => {
         if (tag !== gen) return;

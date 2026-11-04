@@ -76,3 +76,18 @@ test('internal-interface comparison: matched interface → 0, mismatched → pos
     }
   }
 });
+import { lensProfile } from '../src/appearance/scene.js';
+test('bundled 16-wavelength mode agrees with exact per-wavelength mode (dispersive lens, coated)', () => {
+  // 分散の大きい N-SF11 の両凸レンズ(前面 MgF2 コート)を格子背景の前で斜めから見る
+  const lens = { id: 'L', name: 'L', profile: lensProfile(0, 20, 8, 6, -20, 8), material: { type: 'preset', name: 'N-SF11' }, coatings: { 0: 'mgf2' }, visible: true };
+  const opts = { camera: { target: [0, 0, 3], azimuth: 25, elevation: 10, distance: 60, fov: 22 }, env: { type: 'grid' }, width: 24, height: 18 };
+  const exact = renderImage([lens], { ...opts, passes: 64, exactSpectral: true });
+  const fast = renderImage([lens], { ...opts, passes: 4 });
+  const avg = (img, c) => { let s = 0; for (let i = c; i < img.rgb.length; i += 3) s += img.rgb[i]; return (3 * s) / img.rgb.length; };
+  for (const c of [0, 1, 2]) assert.ok(Math.abs(avg(fast, c) / avg(exact, c) - 1) < 0.03, `ch${c}: ${avg(fast, c)} vs ${avg(exact, c)}`);
+  // 画素ごとの差: 4 パスでは細い格子線の縁取り(サンプル位置)のノイズが主。同じパス数まで重ねれば差は正確モード自身のノイズ以下
+  const rms = (a, b) => { let e = 0; for (let i = 0; i < a.rgb.length; i++) e += (a.rgb[i] - b.rgb[i]) ** 2; return Math.sqrt(e / a.rgb.length); };
+  const fast64 = renderImage([lens], { ...opts, passes: 64 });
+  const exact128 = renderImage([lens], { ...opts, passes: 128, exactSpectral: true });
+  assert.ok(rms(fast64, exact128) <= rms(exact, exact128) * 1.2, `fast64 ${rms(fast64, exact128)} vs exact64 noise ${rms(exact, exact128)}`);
+});

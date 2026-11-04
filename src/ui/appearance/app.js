@@ -460,7 +460,7 @@ export function initAppearance({ getSystem, getState, setState }) {
     $('ap-exposure').addEventListener('input', () => { $('ap-auto').checked = false; view.setExposure(2 ** +$('ap-exposure').value, false); });
     $('ap-auto').addEventListener('change', () => view.setExposure(2 ** +$('ap-exposure').value, $('ap-auto').checked));
     view = createRenderView($('ap-canvas'), pool, {
-      onProgress: (p, m, low) => { $('ap-status').textContent = low ? '回転中(粗い表示)…' : p < m ? `精細化中… ${p}/${m} パス(色は 1 パス目から正しく表示されます)` : `完了(${m} パス)`; },
+      onProgress: (p, m, low) => { $('ap-status').textContent = low ? '回転中(粗い表示)…' : p === 0 ? '描画中…' : p < m ? `精細化中… ${p}/${m} パス(色は 1 パス目から正しく表示されます)` : `完了(${m} パス)`; },
       onCamera: () => { syncCameraInputs(); setState(st); },
       onLine, onFrame,
       onExposure: (ex) => { $('ap-exposure-out').textContent = `×${ex < 10 ? ex.toFixed(2) : ex.toPrecision(3)}`; },
