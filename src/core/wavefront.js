@@ -18,19 +18,41 @@ export function nollToNM(j) {
 }
 
 const fact = (k) => { let f = 1; for (let i = 2; i <= k; i++) f *= i; return f; };
-function radial(n, am, r) {
-  let s = 0;
+
+const ZCACHE = [];
+function zinfo(j) {
+  if (ZCACHE[j]) return ZCACHE[j];
+  const [n, m] = nollToNM(j);
+  const am = Math.abs(m);
+  const terms = [];
   for (let k = 0; k <= (n - am) / 2; k++)
-    s += ((k % 2 ? -1 : 1) * fact(n - k)) / (fact(k) * fact((n + am) / 2 - k) * fact((n - am) / 2 - k)) * r ** (n - 2 * k);
-  return s;
+    terms.push([((k % 2 ? -1 : 1) * fact(n - k)) / (fact(k) * fact((n + am) / 2 - k) * fact((n - am) / 2 - k)), n - 2 * k]);
+  return (ZCACHE[j] = { m, am, terms, norm: m === 0 ? Math.sqrt(n + 1) : Math.sqrt(2 * (n + 1)) });
 }
 
 export function zernike(j, rho, theta) {
-  const [n, m] = nollToNM(j);
-  const am = Math.abs(m);
-  const R = radial(n, am, rho);
-  if (m === 0) return Math.sqrt(n + 1) * R;
-  return Math.sqrt(2 * (n + 1)) * R * (m > 0 ? Math.cos(am * theta) : Math.sin(am * theta));
+  const { m, am, terms, norm } = zinfo(j);
+  let R = 0;
+  for (const [c, p] of terms) R += c * rho ** p;
+  if (m === 0) return norm * R;
+  return norm * R * (m > 0 ? Math.cos(am * theta) : Math.sin(am * theta));
+}
+
+/** j = 1..jMax をまとめて評価(out[j-1])。ρ のべき・cos/sin(mθ) を共有して高速化 */
+export function zernikeAll(jMax, rho, theta, out = new Float64Array(jMax)) {
+  const nMax = nollToNM(jMax)[0] + 1;
+  const pw = [1];
+  for (let k = 1; k <= nMax; k++) pw[k] = pw[k - 1] * rho;
+  const cs = [1], sn = [0];
+  const c1 = Math.cos(theta), s1 = Math.sin(theta);
+  for (let k = 1; k <= nMax; k++) { cs[k] = cs[k - 1] * c1 - sn[k - 1] * s1; sn[k] = sn[k - 1] * c1 + cs[k - 1] * s1; }
+  for (let j = 1; j <= jMax; j++) {
+    const { m, am, terms, norm } = zinfo(j);
+    let R = 0;
+    for (const [c, p] of terms) R += c * pw[p];
+    out[j - 1] = m === 0 ? norm * R : norm * R * (m > 0 ? cs[am] : sn[am]);
+  }
+  return out;
 }
 
 export const ZERNIKE_NAMES = {
@@ -70,7 +92,7 @@ function solve(A, b) {
 export function fitZernike(grid, n, jMax = 37) {
   const A = Array.from({ length: jMax }, () => new Array(jMax).fill(0));
   const b = new Array(jMax).fill(0);
-  const z = new Array(jMax);
+  const z = new Float64Array(jMax);
   let count = 0;
   for (let iy = 0; iy < n; iy++) for (let ix = 0; ix < n; ix++) {
     const v = grid[iy * n + ix];
@@ -79,7 +101,7 @@ export function fitZernike(grid, n, jMax = 37) {
     const r = Math.hypot(x, y), t = Math.atan2(y, x);
     if (r > 1) continue;
     count++;
-    for (let j = 0; j < jMax; j++) z[j] = zernike(j + 1, r, t);
+    zernikeAll(jMax, r, t, z);
     for (let i = 0; i < jMax; i++) {
       b[i] += z[i] * v;
       for (let j = 0; j < jMax; j++) A[i][j] += z[i] * z[j];
@@ -96,9 +118,13 @@ export function exitPupil(sys, lambda) {
   let k = -1;
   for (let i = S.length - 2; i > stop; i--) if (S[i].kind === 'surface') { k = i; break; }
   const z = surfaceZ(sys);
-  if (k < 0) return { z: z[stop], stop };
+  const rStop = S[stop].diameter / 2;
+  if (k < 0) return { z: z[stop], stop, radius: rStop };
   const { y, u } = ynuTrace(sys, lambda, 0, 1, stop);
-  return { z: z[k] - y[k] / u[k], stop };
+  const zxp = z[k] - y[k] / u[k];
+  // 絞り縁の像高: 絞り縁から出る任意の近軸光線は射出瞳面で同じ高さを通る
+  const e = ynuTrace(sys, lambda, rStop, 0, stop);
+  return { z: zxp, stop, radius: Math.abs(e.y[k] + e.u[k] * (zxp - z[k])) };
 }
 
 /**
@@ -128,9 +154,14 @@ export function wavefront(sys, objPoint, lambda, n = 32) {
   };
   const chiefOpl = oplToSphere(traceRay(sys, chiefRay, { toSurface: last }).opl, cP, cd);
   const lamMm = lambda * 1e-3;
+  const spots = [];
+  let total = 0;
   for (const ray of fanRays(sys, objPoint, lambda, n)) {
+    total++;
     const full = traceRay(sys, ray);
     if (!full.alive) continue;
+    const Q = full.points[full.points.length - 1];
+    spots.push([Q[0] - I[0], Q[1] - I[1]]);
     const part = traceRay(sys, ray, { toSurface: last });
     const v = (oplToSphere(part.opl, part.points[last], part.final.d) - chiefOpl) / lamMm;
     if (Number.isFinite(v)) grid[ray.grid[1] * n + ray.grid[0]] = v;
@@ -139,5 +170,9 @@ export function wavefront(sys, objPoint, lambda, n = 32) {
   for (const v of grid) if (Number.isFinite(v)) { s += v; s2 += v * v; cnt++; mn = Math.min(mn, v); mx = Math.max(mx, v); }
   if (!cnt) return empty;
   const mean = s / cnt;
-  return { grid, n, rmsWaves: Math.sqrt(Math.max(0, s2 / cnt - mean * mean)), pvWaves: mx - mn, chief: { image: I, exitPupilZ: xp.z, Rref } };
+  return {
+    grid, n, lambda, spots, aliveFraction: total ? spots.length / total : 0,
+    rmsWaves: Math.sqrt(Math.max(0, s2 / cnt - mean * mean)), pvWaves: mx - mn,
+    pupilDiamMm: 2 * xp.radius, chief: { image: I, exitPupilZ: xp.z, Rref, dir: chief.final.d, objDir: chiefRay.d },
+  };
 }
