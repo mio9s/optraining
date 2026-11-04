@@ -1,12 +1,12 @@
 :root {
   --bg: #f4f5f7; --fg: #1d1d1f; --panel: #ffffff; --line: #d9dbe0; --muted: #6b6e76; --accent: #2b6cb0;
-  --accent-fg: #fff; --err: #c62828; --err-bg: #fdecea; --warn: #9a5b00; --input: #fff; --glass: rgba(110, 165, 230, 0.28); --ghost: #b05cff;
+  --accent-fg: #fff; --err: #c62828; --err-bg: #fdecea; --warn: #9a5b00; --input: #fff; --glass: rgba(110, 165, 230, 0.28); --custom-medium: rgba(230, 160, 40, 0.38); --ghost: #b05cff;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: #131417; --fg: #e8e8ea; --panel: #1c1d21; --line: #34363c; --muted: #9a9ca3; --accent: #6aa5ff;
-    --accent-fg: #0b1220; --err: #ff7b6e; --err-bg: #3a1d1b; --warn: #ffb74d; --input: #24262b; --glass: rgba(110, 165, 230, 0.22); --ghost: #c98bff;
+    --accent-fg: #0b1220; --err: #ff7b6e; --err-bg: #3a1d1b; --warn: #ffb74d; --input: #24262b; --glass: rgba(110, 165, 230, 0.22); --custom-medium: rgba(240, 170, 60, 0.32); --ghost: #c98bff;
     color-scheme: dark;
   }
 }
@@ -71,12 +71,15 @@ label.check { display: inline-flex; align-items: center; gap: 4px; cursor: point
 .wl { display: inline-flex; align-items: center; gap: 4px; margin-right: 6px; }
 .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: middle; }
 .sw.ghost { background: var(--ghost); }
+.sw.glass { background: var(--glass); border: 1px solid var(--line); }
+.sw.custom { background: var(--custom-medium); border: 1px solid var(--line); }
 .legend { display: flex; gap: 12px; font-size: 12px; margin: 6px 0; flex-wrap: wrap; }
 .legend span { display: inline-flex; gap: 4px; align-items: center; }
 #layout { width: 100%; height: 300px; display: block; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); touch-action: none; cursor: grab; }
 .imgctl { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin: 8px 0; }
 label.file { border: 1px dashed var(--accent); color: var(--accent); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
 label.file input { display: none; }
+label.file.secondary-file { border-style: solid; border-color: var(--line); color: var(--fg); padding: 5px 10px; }
 .images { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 figure { margin: 0; }
 figure canvas { width: 100%; aspect-ratio: 1; display: block; background: #000; border-radius: 4px; image-rendering: auto; }

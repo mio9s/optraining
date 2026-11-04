@@ -1,7 +1,7 @@
 // 解析パネル: 色収差 / ゼルニケ / 散乱公式
 import uPlot from 'uplot';
 import { paraxialTrace, chromatic } from '../core/paraxial.js';
-import { wavefront, fitZernike, zernikeName } from '../core/wavefront.js';
+import { wavefront, fitZernike, zernikeName, bestFocus } from '../core/wavefront.js';
 import { rayleigh, rayleighPhase, mie, miePhase, henyeyGreenstein, forwardBackward, surfaceTIS, surfaceTIST, ramanShift, ramanAntiStokesRatio } from '../core/scatter.js';
 import { LINES } from '../core/glass.js';
 import { imageNA } from '../core/imaging.js';
@@ -53,7 +53,7 @@ export function renderChromatic(el, sys) {
   const zScreen = sys.surfaces.reduce((a, s) => a + s.thickness, 0);
   const na = imageNA(sys, LINES.d);
   const tbl = h('table', { class: 'kv' },
-    h('thead', {}, h('tr', {}, h('th', {}, '波長'), h('th', { title: '近軸焦点距離' }, 'EFL [mm]'), h('th', { title: '物体面 z=0 から測った近軸像位置' }, '近軸像位置 z [mm]'), h('th', { title: '近軸像位置 − スクリーン位置(+ は像がスクリーンより奥)' }, '像 − スクリーン [mm]'), h('th', { title: '最大物体高の実主光線のスクリーン上の像高' }, '主光線像高 [mm]'))),
+    h('thead', {}, h('tr', {}, h('th', {}, '波長'), h('th', { title: '近軸焦点距離' }, 'EFL [mm]'), h('th', { title: '物体面 z=0 から測った近軸像位置' }, '近軸像位置 z [mm]'), h('th', { title: '近軸像位置 − スクリーン位置(+ は像がスクリーンより奥)' }, '像面ずれ [mm]'), h('th', { title: '最大物体高の実主光線のスクリーン上の像高' }, '主光線像高 [mm]'))),
     h('tbody', {}, ...W.map((l) => {
       const p = paraxialTrace(sys, l);
       return h('tr', {}, h('td', {}, h('span', { class: 'sw', style: `background:${WL_COLOR(l)}` }), ` ${(l * 1000).toFixed(0)} nm`), h('td', {}, f(p.efl, 3)), h('td', {}, f(c.longitudinal[l], 4)), h('td', {}, f(c.longitudinal[l] - zScreen, 4)), h('td', {}, f(c.chiefHeights[l], 5)));
@@ -95,6 +95,10 @@ export function renderZernike(el, sys, state) {
       h('div', { class: 'metric' }, h('span', {}, 'PV'), h('b', {}, `${f(wf.pvWaves, 4)} λ`)),
       h('div', { class: 'metric', title: 'マレシャル近似 exp(−(2π·RMS)²)。RMS が大きいと不正確' }, h('span', {}, 'ストレール比(近似)'), h('b', {}, f(strehl, 3))),
     ));
+    const bf = bestFocus(sys, [0, state.zField * sys.object.height, 0], lam, 24);
+    if (bf) body.append(h('p', { class: 'note' },
+      `RMS が最小になる焦点(Z4 = 0)はスクリーンから ${bf.shift >= 0 ? '+' : ''}${f(bf.shift, 3)} mm(+ は奥)。そこでの RMS = ${f(bf.rmsAtBest, 3)} λ。`,
+      'Z4(デフォーカス)はこの最良焦点とスクリーンのずれを表し、軸外では像面湾曲も含みます。'));
     const map = h('canvas', { class: 'wfmap', width: wf.n, height: wf.n, title: '射出瞳上の OPD(平均を引いた値。赤 = 正、青 = 負、上 = +y)' });
     let sum = 0, cnt = 0; for (const v of wf.grid) if (Number.isFinite(v)) { sum += v; cnt++; }
     const mean = sum / cnt;

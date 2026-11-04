@@ -23,7 +23,7 @@ export function layoutData(sys, { rays = 7, ghosts = false } = {}) {
     const R = s.kind === 'surface' ? s.radius : Infinity;
     const hh = Number.isFinite(R) ? Math.min(h, Math.abs(R)) : h;
     for (let k = 0; k <= 40; k++) { const y = -hh + (2 * hh * k) / 40; pts.push([z[i] + sag(y, R), y]); }
-    return { kind: s.kind, z: z[i], h: hh, pts, glassAfter: s.kind === 'surface' && s.material?.type !== 'air' };
+    return { kind: s.kind, z: z[i], h: hh, pts, glassAfter: s.kind === 'surface' && s.material?.type !== 'air', custom: s.kind === 'surface' && s.material?.type === 'model' };
   });
   const out = [];
   const ghostPaths = [];
@@ -69,7 +69,7 @@ export function createLayoutView(canvas) {
     ctx.clearRect(0, 0, w, h);
     if (!data) return;
     if (!view) fit();
-    const fg = cssVar('--fg', '#222'), muted = cssVar('--muted', '#888'), glass = cssVar('--glass', 'rgba(120,170,230,0.25)');
+    const fg = cssVar('--fg', '#222'), muted = cssVar('--muted', '#888'), glass = cssVar('--glass', 'rgba(120,170,230,0.25)'), customFill = cssVar('--custom-medium', 'rgba(230,160,40,0.35)');
     // 光軸
     ctx.strokeStyle = muted; ctx.setLineDash([6, 4]); ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(0, Y(0)); ctx.lineTo(w, Y(0)); ctx.stroke(); ctx.setLineDash([]);
@@ -80,7 +80,7 @@ export function createLayoutView(canvas) {
       let j = i + 1; while (j < S.length && S[j].kind === 'iris') j++;
       if (j >= S.length) continue;
       const a = S[i].pts, b = S[j].pts;
-      ctx.fillStyle = glass; ctx.beginPath();
+      ctx.fillStyle = S[i].custom ? customFill : glass; ctx.beginPath();
       a.forEach(([z, y], k) => (k ? ctx.lineTo(X(z), Y(y)) : ctx.moveTo(X(z), Y(y))));
       [...b].reverse().forEach(([z, y]) => ctx.lineTo(X(z), Y(y)));
       ctx.closePath(); ctx.fill();

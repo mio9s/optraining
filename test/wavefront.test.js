@@ -93,3 +93,18 @@ test('perfect lens-free reference: grid has NaN outside pupil and no NaN inside'
   wf.grid.forEach((v) => (Number.isNaN(v) ? nan++ : fin++));
   assert.ok(fin > 150 && nan > 0);
 });
+test('bestFocus finds the minimum-RMS focus (Z4 = 0)', async () => {
+  const { bestFocus } = await import('../src/core/wavefront.js');
+  const sys = singlet();
+  const r = bestFocus(sys, [0, 0, 0], 0.52);
+  // 補正不足の球面収差 → 最良焦点は近軸焦点より手前(負)
+  assert.ok(r.shift < 0, String(r.shift));
+  assert.ok(r.rmsAtBest < r.rmsAtScreen);
+  const s2 = structuredClone(sys); s2.surfaces[2].thickness += r.shift;
+  const wf = wavefront(s2, [0, 0, 0], 0.52, 32);
+  assert.ok(Math.abs(fitZernike(wf.grid, wf.n, 37)[3]) < 1e-3);
+  for (const d of [-0.2, 0.2]) { // 前後にずらすと RMS は増える
+    const s3 = structuredClone(s2); s3.surfaces[2].thickness += d;
+    assert.ok(wavefront(s3, [0, 0, 0], 0.52, 32).rmsWaves > r.rmsAtBest);
+  }
+});

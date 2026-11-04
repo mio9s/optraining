@@ -21,6 +21,8 @@ const state = {
   result: null,
   resultStale: false,
   ui: { zField: 0, zWl: 0.52, tab: 'chroma' },
+  edited: false,
+  sampleKey: 'achromat',
 };
 
 // ---------- 物体 ----------
@@ -40,9 +42,21 @@ function scheduleAnalysis() {
   clearTimeout(timer);
   timer = setTimeout(runAnalysis, 200);
 }
+const STORE_KEY = 'optraining.system.v1';
+const toJSON = (sys) => JSON.stringify(sys, (k, v) => (v === Infinity ? 'inf' : v === -Infinity ? '-inf' : v), 1);
+const fromJSON = (text) => JSON.parse(text, (k, v) => (v === 'inf' ? Infinity : v === '-inf' ? -Infinity : v));
+function saveLocal() {
+  try { localStorage.setItem(STORE_KEY, toJSON({ sys: state.valid, sample: state.sampleKey, edited: state.edited })); } catch { /* 保存できない環境では無視 */ }
+}
+function markEdited() {
+  if (state.edited) return;
+  state.edited = true;
+  const opt = $('sample').selectedOptions[0];
+  if (opt && !opt.textContent.endsWith('(編集済み)')) opt.textContent += '(編集済み)';
+}
 function runAnalysis(refit = false) {
   const v = validateSystem(state.sys);
-  if (v.ok) state.valid = structuredClone(state.sys);
+  if (v.ok) { state.valid = structuredClone(state.sys); saveLocal(); }
   const sys = state.valid;
   try {
     layout.update(layoutData(sys, { rays: 7, ghosts: $('show-ghost').checked }), refit);
@@ -220,7 +234,7 @@ function renderSettings() {
 
 // ---------- 起動 ----------
 const layout = createLayoutView($('layout'));
-const editor = createEditor($('editor'), () => state.sys, () => scheduleAnalysis());
+const editor = createEditor($('editor'), () => state.sys, () => { markEdited(); scheduleAnalysis(); });
 
 function syncSysFields() {
   $('obj-h').value = fmt(state.sys.object.height);
@@ -231,17 +245,22 @@ function syncSysFields() {
     s.innerHTML = `<i class="sw" style="background:${WL_COLOR(l)}"></i>${(l * 1000).toFixed(0)} nm`;
     return s;
   }));
-  $('layout-legend').innerHTML = state.sys.wavelengths.map((l) => `<span><i class="sw" style="background:${WL_COLOR(l)}"></i>${(l * 1000).toFixed(0)} nm</span>`).join('') + '<span><i class="sw ghost"></i>ゴースト</span>';
+  $('layout-legend').innerHTML = state.sys.wavelengths.map((l) => `<span><i class="sw" style="background:${WL_COLOR(l)}"></i>${(l * 1000).toFixed(0)} nm</span>`).join('') + '<span><i class="sw glass"></i>プリセットガラス</span><span><i class="sw custom"></i>カスタム媒質(nd・νd 指定)</span><span><i class="sw ghost"></i>ゴースト</span>';
 }
 function bindSysField(id, apply) {
-  $(id).addEventListener('input', () => { apply(parseNumber($(id).value)); editor.markErrors(); scheduleAnalysis(); });
+  $(id).addEventListener('input', () => { apply(parseNumber($(id).value)); markEdited(); editor.markErrors(); scheduleAnalysis(); });
 }
 bindSysField('obj-h', (v) => (state.sys.object.height = v));
 bindSysField('scr-w', (v) => (state.sys.screen.width = v));
 bindSysField('scr-px', (v) => (state.sys.screen.pixels = v));
 
-function loadSystem(sys) {
+function resetSampleLabels() {
+  for (const o of $('sample').options) o.textContent = SAMPLE_SYSTEMS[o.value].label;
+}
+function loadSystem(sys, { edited = false } = {}) {
   state.sys = sys; state.result = null;
+  resetSampleLabels(); state.edited = false;
+  if (edited) markEdited();
   editor.render(); syncSysFields();
   $('img-cap').textContent = '結像画像(「結像を計算」を押してください)';
   $('img-cap').classList.remove('warn');
@@ -251,10 +270,33 @@ function loadSystem(sys) {
 }
 
 for (const [k, v] of Object.entries(SAMPLE_SYSTEMS)) $('sample').append(new Option(v.label, k));
-$('sample').addEventListener('change', () => loadSystem(SAMPLE_SYSTEMS[$('sample').value].make()));
+$('sample').addEventListener('change', () => {
+  if (state.edited && !confirm('編集中のレンズデータを破棄してサンプル系を読み込みますか?(必要なら先に「保存」してください)')) {
+    $('sample').value = state.sampleKey; return;
+  }
+  state.sampleKey = $('sample').value;
+  loadSystem(SAMPLE_SYSTEMS[state.sampleKey].make());
+});
 $('btn-focus').addEventListener('click', () => {
   if (!validateSystem(state.sys).ok) { alert('入力エラーを先に直してください'); return; }
-  loadSystem(focusScreen(state.sys, 0.52));
+  loadSystem(focusScreen(state.sys, 0.52), { edited: true });
+});
+$('btn-save').addEventListener('click', () => {
+  const blob = new Blob([toJSON(state.valid)], { type: 'application/json' });
+  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: 'optraining-system.json' });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+});
+$('file-sys').addEventListener('change', async () => {
+  const f = $('file-sys').files[0];
+  $('file-sys').value = '';
+  if (!f) return;
+  try {
+    const sys = fromJSON(await f.text());
+    const v = validateSystem(sys);
+    if (!v.ok) throw new Error(v.errors.map((e) => `行 ${e.row}: ${e.message}`).join('\n'));
+    loadSystem(sys, { edited: true });
+  } catch (e) { alert(`レンズデータを読み込めませんでした:\n${e.message}`); }
 });
 $('btn-help').addEventListener('click', () => $('help').showModal());
 $('btn-fit').addEventListener('click', () => layout.fit());
@@ -297,5 +339,15 @@ document.querySelectorAll('[role=tab]').forEach((b) => b.addEventListener('click
 
 renderScatterPanels($('tab-scatter'));
 renderSettings();
+// 前回の状態を復元
+state.sampleKey = 'achromat';
+try {
+  const saved = JSON.parse(localStorage.getItem(STORE_KEY) ?? 'null', (k, v) => (v === 'inf' ? Infinity : v === '-inf' ? -Infinity : v));
+  if (saved?.sys && validateSystem(saved.sys).ok) {
+    state.sampleKey = SAMPLE_SYSTEMS[saved.sample] ? saved.sample : 'achromat';
+    $('sample').value = state.sampleKey;
+    loadSystem(saved.sys, { edited: !!saved.edited });
+  }
+} catch { /* 復元できなければ既定系 */ }
 syncSysFields();
 runAnalysis(true);

@@ -56,7 +56,7 @@ export function zernikeAll(jMax, rho, theta, out = new Float64Array(jMax)) {
 }
 
 export const ZERNIKE_NAMES = {
-  1: 'ピストン', 2: 'チルト X', 3: 'チルト Y', 4: 'デフォーカス(像面湾曲)',
+  1: 'ピストン', 2: 'チルト X', 3: 'チルト Y', 4: 'デフォーカス',
   5: '非点収差 45°', 6: '非点収差 0°', 7: 'コマ Y', 8: 'コマ X', 9: 'トレフォイル Y', 10: 'トレフォイル X',
   11: '球面収差(3 次)', 12: '2 次非点 0°', 13: '2 次非点 45°', 14: 'テトラフォイル 0°', 15: 'テトラフォイル 45°',
   16: '2 次コマ X', 17: '2 次コマ Y', 22: '球面収差(5 次)', 37: '球面収差(7 次)',
@@ -175,4 +175,32 @@ export function wavefront(sys, objPoint, lambda, n = 32) {
     rmsWaves: Math.sqrt(Math.max(0, s2 / cnt - mean * mean)), pvWaves: mx - mn,
     pupilDiamMm: 2 * xp.radius, chief: { image: I, exitPupilZ: xp.z, Rref, dir: chief.final.d, objDir: chiefRay.d },
   };
+}
+
+/**
+ * RMS 波面収差が最小になる焦点位置(Z4 = 0)。スクリーンを動かしたときの Z4 の変化は線形なので、
+ * 数値微分のニュートン法(2 回)で求める。返り値: {shift(スクリーンからの距離 mm、+ は奥), rmsAtBest, rmsAtScreen}
+ */
+export function bestFocus(sys, objPoint, lambda, n = 32) {
+  const k = sys.surfaces.length - 2;
+  const at = (d) => {
+    const s = structuredClone(sys);
+    s.surfaces[k].thickness += d;
+    if (s.surfaces[k].thickness < 0) return null;
+    const wf = wavefront(s, objPoint, lambda, n);
+    return wf.chief ? { c4: fitZernike(wf.grid, wf.n, 37)[3], rms: wf.rmsWaves } : null;
+  };
+  const a = at(0);
+  if (!a) return null;
+  let shift = 0, cur = a;
+  for (let it = 0; it < 2; it++) {
+    const h = 0.01 * Math.max(1, Math.abs(shift));
+    const b = at(shift + h);
+    if (!b || b.c4 === cur.c4) break;
+    shift -= cur.c4 / ((b.c4 - cur.c4) / h);
+    const c = at(shift);
+    if (!c) return null;
+    cur = c;
+  }
+  return { shift, rmsAtBest: cur.rms, rmsAtScreen: a.rms };
 }

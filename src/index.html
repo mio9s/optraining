@@ -12,6 +12,8 @@
   <div class="top-actions">
     <label class="field inline">サンプル系 <select id="sample"></select></label>
     <button type="button" id="btn-focus" title="スクリーンを近軸像面(520 nm)へ移動します">スクリーンを像面へ合わせる</button>
+    <button type="button" id="btn-save" class="secondary" title="レンズデータを JSON ファイルに保存します(編集内容はこのブラウザにも自動保存されます)">保存</button>
+    <label class="file secondary-file" title="保存した JSON ファイルからレンズデータを読み込みます">読込…<input type="file" id="file-sys" accept=".json,application/json"></label>
     <button type="button" id="btn-help" class="secondary">使い方</button>
   </div>
 </header>
@@ -95,6 +97,7 @@
     <li><b>② 断面図</b>は入力に合わせて自動更新されます。青 450 nm / 緑 520 nm / 赤 620 nm。</li>
     <li><b>③ 結像</b>: パターンを選ぶか画像を読み込み、「結像を計算」を押します。PSF(回折または幾何)を畳み込んだ像、ゴースト、散乱光、ラマン光を合成表示します。</li>
     <li>右側のタブで色収差、ゼルニケ係数、散乱の各公式、散乱の設定を確認・変更できます。</li>
+    <li>編集内容はこのブラウザに自動保存され、次回開いたときに復元されます。「保存」で JSON ファイルに書き出し、「読込…」で戻せます。</li>
   </ol>
   <p class="note">単位: 長さ mm、波長 µm(表示は nm)。座標: 光軸 +z(右)、+y(上)。曲率半径は曲率中心が +z 側で正。</p>
   <form method="dialog"><button class="primary">閉じる</button></form>
