@@ -110,7 +110,7 @@ export function presetLights(env, scene) {
 }
 
 // ---------- 追跡 ----------
-const MAX_DEPTH = 12, SPLIT_DEPTH = 3;
+const MAX_DEPTH = 12, SPLIT_DEPTH = 3, SPLIT_WEIGHT = 1e-4;
 
 /**
  * 1 本の光線の放射輝度(波長 λ nm)。w は画素から見た経路の重み。
@@ -128,11 +128,14 @@ function radiance(ctx, o, d, lam, depth, firstRefl, w) {
   const key = faceKey(hit);
   if (f.opaque) return shadeOpaque(ctx, f, P, d, lam, depth, firstRefl ?? key, w);
   const tf = thinFilm(f.nBefore, f.layers, f.nAfter, f.cosI, lam / 1000);
-  const R = tf.R, T = 1 - R;
+  // 比較用: 内部界面(部品どうしの接合面)の反射を消す(屈折はそのまま)
+  const internal = hit.hits.length > 1 && f.before && f.after;
+  const R = ctx.suppressInternal && internal && f.cosI > 0 && tf.R < 1 ? 0 : tf.R, T = 1 - R;
   const rd = reflect(d, f.normal);
   const td = T > 1e-12 ? refract(d, f.normal, f.nBefore, f.nAfter) : null;
   if (!td) return radiance(ctx, P, rd, lam, depth + 1, firstRefl ?? key, w);
-  if (depth < SPLIT_DEPTH) {
+  // 重みの大きい分岐は両方を追い(ノイズなし)、寄与が無視できる深い分岐だけ確率的に選ぶ
+  if (depth < SPLIT_DEPTH || w * Math.min(R, T) > SPLIT_WEIGHT) {
     const lr = R > 0 ? R * radiance(ctx, P, rd, lam, depth + 1, firstRefl ?? key, w * R) : 0;
     return lr + T * radiance(ctx, P, td, lam, depth + 1, firstRefl, w * T);
   }
@@ -181,7 +184,7 @@ export function renderTile(sceneCache, job) {
     const bin = (job.pass + ((px * 7 + py * 13) % nBins)) % nBins;
     const lam = sampleLambda(bin, nBins, 0.5);
     const pc = {};
-    const ctx = { scene, env: job.env, lights: job.lights, rand, contrib: pc };
+    const ctx = { scene, env: job.env, lights: job.lights, rand, contrib: pc, suppressInternal: !!job.suppressInternal };
     const L = radiance(ctx, ray.o, ray.d, lam, 0, null, 1);
     const yb = spectralToY(lam, 1);
     for (const key in pc) contrib[key] = (contrib[key] ?? 0) + pc[key] * yb;
@@ -202,13 +205,13 @@ export function prepareScene(parts) {
 }
 
 /** 画像全体を n パス描画(Node のテスト・角度一覧用の同期版) */
-export function renderImage(parts, { camera, env, lights, width, height, passes = 16 }) {
+export function renderImage(parts, { camera, env, lights, width, height, passes = 16, suppressInternal = false }) {
   const cache = prepareScene(parts);
   const L = [...(lights ?? []), ...presetLights(env, cache)];
   const rgb = new Float32Array(width * height * 3), y = new Float32Array(width * height);
   const contrib = {};
   for (let p = 0; p < passes; p++) {
-    const t = renderTile(cache, { camera, env, lights: L, width, height, pass: p, x0: 0, y0: 0, w: width, h: height });
+    const t = renderTile(cache, { camera, env, lights: L, width, height, pass: p, x0: 0, y0: 0, w: width, h: height, suppressInternal });
     for (let i = 0; i < rgb.length; i++) rgb[i] += t.rgb[i] / passes;
     for (let i = 0; i < y.length; i++) y[i] += t.y[i] / passes;
     for (const k in t.contrib) contrib[k] = (contrib[k] ?? 0) + t.contrib[k] / passes;
@@ -221,4 +224,22 @@ export function listFaces(parts) {
   const out = [];
   for (const p of parts) p.profile.segments.forEach((s, i) => out.push({ partId: p.id, seg: i, name: `${p.name} 面 ${i + 1}` }));
   return out;
+}
+
+/**
+ * 内部界面の見え方マップ: 通常の画像 a と内部界面の反射を消した画像 b の輝度から、画素ごとのウェーバーコントラスト
+ * C = (Y_a − Y_b) / Y_b を求める。mask は部品が写っている画素(どちらかで部品に当たった)。
+ */
+export function internalVisibility(a, b, threshold = 0.02, floor = 1e-4) {
+  const n = a.y.length, C = new Float32Array(n);
+  let max = 0, over = 0, count = 0, maxIdx = -1;
+  for (let i = 0; i < n; i++) {
+    const ya = a.y[i] / (a.n ? a.n[i] || 1 : 1), yb = b.y[i] / (b.n ? b.n[i] || 1 : 1);
+    const c = (ya - yb) / Math.max(yb, floor);
+    C[i] = c;
+    if (Math.abs(ya - yb) > 0 || yb > 0) count++;
+    if (Math.abs(c) > Math.abs(max)) { max = c; maxIdx = i; }
+    if (Math.abs(c) >= threshold) over++;
+  }
+  return { C, max, maxIdx, over, fraction: over / n };
 }

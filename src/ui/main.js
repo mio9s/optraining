@@ -257,7 +257,7 @@ bindSysField('scr-w', (v) => (state.sys.screen.width = v));
 bindSysField('scr-px', (v) => (state.sys.screen.pixels = v));
 
 function resetSampleLabels() {
-  for (const o of $('sample').options) o.textContent = SAMPLE_SYSTEMS[o.value].label;
+  for (const o of [...$('sample').options]) { if (SAMPLE_SYSTEMS[o.value]) o.textContent = SAMPLE_SYSTEMS[o.value].label; else o.remove(); }
 }
 function loadSystem(sys, { edited = false } = {}) {
   state.sys = sys; state.result = null;
@@ -276,6 +276,7 @@ $('sample').addEventListener('change', () => {
   if (state.edited && !confirm('編集中のレンズデータを破棄してサンプル系を読み込みますか?(必要なら先に「保存」してください)')) {
     $('sample').value = state.sampleKey; return;
   }
+  if (!SAMPLE_SYSTEMS[$('sample').value]) return;
   state.sampleKey = $('sample').value;
   loadSystem(SAMPLE_SYSTEMS[state.sampleKey].make());
 });
@@ -298,10 +299,14 @@ $('file-sys').addEventListener('change', async () => {
     // 旧形式(レンズデータのみ)と新形式 {system, appearance} の両方を受け付ける
     const sys = obj.surfaces ? obj : obj.system;
     if (!sys) throw new Error('optraining のファイルではありません');
-    if (obj.appearance) { Object.assign(appearanceState, defaultAppearance(), obj.appearance); saveAppearance(); appearance.reload(); }
     const v = validateSystem(sys);
     if (!v.ok) throw new Error(v.errors.map((e) => `行 ${e.row}: ${e.message}`).join('\n'));
-    loadSystem(sys, { edited: true });
+    loadSystem(sys, { edited: false });
+    // サンプル欄に読み込んだファイル名を表示
+    $('sample').append(new Option(`ファイル: ${f.name}`, 'file', true, true));
+    $('sample').value = 'file'; state.sampleKey = 'file'; state.edited = false;
+    // 外観の設定はレンズデータを反映した後に読み込む(読み込んだ部品を自動再生成で消さない)
+    if (obj.appearance) { Object.assign(appearanceState, defaultAppearance(), obj.appearance); appearance.reload(); saveAppearance(); }
   } catch (e) { alert(`レンズデータを読み込めませんでした:\n${e.message}`); }
 });
 $('btn-help').addEventListener('click', () => $('help').showModal());

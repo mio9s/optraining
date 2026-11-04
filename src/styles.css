@@ -178,3 +178,4 @@ input.num { width: 64px; text-align: right; }
 .pe-pt b { font-weight: 500; min-width: 56px; color: var(--muted); }
 .pe-pt input { width: 74px; }
 @media (max-width: 900px) { .pe-body { grid-template-columns: 1fr; } }
+.ap-map-canvas { width: 100%; aspect-ratio: 4 / 3; border-radius: 4px; background: #000; margin: 4px 0; }

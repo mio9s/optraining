@@ -61,3 +61,18 @@ test('MgF2-coated reflection looks purple; uncoated is neutral', () => {
   assert.ok(Math.abs(coated.rb / theory - 1) < 0.03, `coated ${coated.rb} theory ${theory}`);
   assert.ok(coated.g < plain.g * 0.5); // 反射が大きく減る
 });
+import { internalVisibility } from '../src/appearance/render.js';
+test('internal-interface comparison: matched interface → 0, mismatched → positive contrast', () => {
+  const opts = { ...view, passes: 32 };
+  const oilA = (nd) => [part('a', rect(0, 15, 0, 2.5)), part('b', rect(0, 15, 2.5, 5), {}, { type: 'model', nd, vd: 64.17 })];
+  for (const [nd, expectZero] of [[1.5168, true], [1.6, false]]) {
+    const parts = oilA(nd);
+    const a = renderImage(parts, opts), b = renderImage(parts, { ...opts, suppressInternal: true });
+    const v = internalVisibility(a, b);
+    if (expectZero) assert.ok(Math.abs(v.max) < 2e-3, String(v.max));
+    else {
+      // BK7/1.6 の界面: R ≈ ((1.6−1.5168)/(3.1168))² ≈ 7e-4、前面反射 4.2 % に比べて約 1.7 %
+      assert.ok(v.max > 0.005 && v.max < 0.05, String(v.max));
+    }
+  }
+});

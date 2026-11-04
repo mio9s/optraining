@@ -98,6 +98,32 @@ export const SAMPLE_SYSTEMS = {
       };
     },
   },
+  adlens: {
+    label: '流体充填可変焦点レンズ(特許 6831374 の実施形態を基にした推定構成)',
+    make: () => {
+      // 特許第 6831374 号 段落 0069〜0084 の層構成(前から): TPU 膜 220 µm / フェニル系シリコーン油 / TPU 受け部後壁 50 µm /
+      // 粘着剤 (3M 8211) 25 µm / 後部レンズ(前面平面・後面凹)。
+      // 特許に無い値は推定: 曲率・流体厚・後部レンズ材質(PC と仮定)・各材料のアッベ数。膜は +3.0 D に膨らませた読書状態。
+      const air = { type: 'air' };
+      const tpu = { type: 'model', nd: 1.505, vd: 50 }, oil = { type: 'model', nd: 1.579, vd: 30 };
+      const psa = { type: 'model', nd: 1.474, vd: 55 }, pc = { type: 'model', nd: 1.586, vd: 30 };
+      const R1 = (oil.nd - 1) / 3.0 * 1000; // 膜+流体の屈折力 +3.0 D
+      const R7 = (pc.nd - 1) / 0.5 * 1000; // 後部レンズ後面 −0.5 D
+      return {
+        surfaces: [
+          { kind: 'object', radius: Infinity, thickness: 1000, material: air, diameter: 200 },
+          { kind: 'surface', radius: +R1.toFixed(3), thickness: 0.22, material: tpu, diameter: 40 },
+          { kind: 'surface', radius: +(R1 - 0.22).toFixed(3), thickness: 2.0, material: oil, diameter: 40 },
+          { kind: 'surface', radius: Infinity, thickness: 0.05, material: tpu, diameter: 40 },
+          { kind: 'surface', radius: Infinity, thickness: 0.025, material: psa, diameter: 40 },
+          { kind: 'surface', radius: Infinity, thickness: 1.8, material: pc, diameter: 40 },
+          { kind: 'surface', radius: +R7.toFixed(3), thickness: 666, material: air, diameter: 40 },
+          { kind: 'screen', radius: Infinity, thickness: 0, material: air, diameter: 120 },
+        ],
+        object: { height: 60 }, screen: { width: 90, pixels: 256 }, wavelengths: [...WAVELENGTHS],
+      };
+    },
+  },
   nodisp: {
     label: '無分散ガラス単レンズ(色収差 0 の確認用)',
     make: () => {

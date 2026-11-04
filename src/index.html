@@ -149,6 +149,9 @@
     <label class="field inline" title="人の目が明るさの違いを見分けられる目安(ウェーバー比)。広い一様な面で約 1〜2 %、細い線ではより大きい"><span>識別の閾値</span><input type="text" id="ap-threshold" class="num"><small>%</small></label>
     <div id="ap-verdict" class="ap-verdict"><p class="note">「線を引いて境界を判定」をオンにして、画像の境界をまたぐように線を引いてください。</p></div>
     <div id="ap-profile" class="chart"></div>
+    <h3 class="sub">内部界面の見え方マップ</h3>
+    <button type="button" id="ap-map-btn" title="今の視点で、部品どうしの接合面の反射が画像をどれだけ変えるかを画素ごとに示します">今の視点でマップを作る</button>
+    <div id="ap-map"></div>
     <h3 class="sub">界面ごとの寄与</h3>
     <table class="kv" id="ap-contrib"></table>
     <h3 class="sub">界面の反射率</h3>

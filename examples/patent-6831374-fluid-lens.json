@@ -1,0 +1,525 @@
+{
+ "format": "optraining",
+ "version": 2,
+ "system": {
+  "surfaces": [
+   {
+    "kind": "object",
+    "radius": "inf",
+    "thickness": 1000,
+    "material": {
+     "type": "air"
+    },
+    "diameter": 200
+   },
+   {
+    "kind": "surface",
+    "radius": 193,
+    "thickness": 0.22,
+    "material": {
+     "type": "model",
+     "nd": 1.505,
+     "vd": 50
+    },
+    "diameter": 40
+   },
+   {
+    "kind": "surface",
+    "radius": 192.78,
+    "thickness": 2,
+    "material": {
+     "type": "model",
+     "nd": 1.579,
+     "vd": 30
+    },
+    "diameter": 40
+   },
+   {
+    "kind": "surface",
+    "radius": "inf",
+    "thickness": 0.05,
+    "material": {
+     "type": "model",
+     "nd": 1.505,
+     "vd": 50
+    },
+    "diameter": 40
+   },
+   {
+    "kind": "surface",
+    "radius": "inf",
+    "thickness": 0.025,
+    "material": {
+     "type": "model",
+     "nd": 1.474,
+     "vd": 55
+    },
+    "diameter": 40
+   },
+   {
+    "kind": "surface",
+    "radius": "inf",
+    "thickness": 1.8,
+    "material": {
+     "type": "model",
+     "nd": 1.586,
+     "vd": 30
+    },
+    "diameter": 40
+   },
+   {
+    "kind": "surface",
+    "radius": 1172,
+    "thickness": 646.8042,
+    "material": {
+     "type": "air"
+    },
+    "diameter": 40
+   },
+   {
+    "kind": "screen",
+    "radius": "inf",
+    "thickness": 0,
+    "material": {
+     "type": "air"
+    },
+    "diameter": 120
+   }
+  ],
+  "object": {
+   "height": 60
+  },
+  "screen": {
+   "width": 90,
+   "pixels": 256
+  },
+  "wavelengths": [
+   0.45,
+   0.52,
+   0.62
+  ]
+ },
+ "appearance": {
+  "parts": [
+   {
+    "id": "auto-1",
+    "name": "膜(TPU 220 µm)",
+    "profile": {
+     "start": [
+      0,
+      1000
+     ],
+     "segments": [
+      {
+       "type": "arc",
+       "to": [
+        20,
+        1001.0390664744516
+       ],
+       "center": [
+        0,
+        1193
+       ],
+       "ccw": false
+      },
+      {
+       "type": "line",
+       "to": [
+        20,
+        1001.2602586838086
+       ]
+      },
+      {
+       "type": "arc",
+       "to": [
+        0,
+        1000.22
+       ],
+       "center": [
+        0,
+        1193
+       ],
+       "ccw": true
+      },
+      {
+       "type": "line",
+       "to": [
+        0,
+        1000
+       ]
+      }
+     ]
+    },
+    "material": {
+     "type": "model",
+     "nd": 1.505,
+     "vd": 50
+    },
+    "coatings": {
+     "0": {
+      "layers": [
+       {
+        "n": 1.34,
+        "d": 10
+       }
+      ]
+     }
+    },
+    "zOffset": 0,
+    "source": "auto",
+    "visible": true,
+    "surfaces": [
+     1,
+     2
+    ]
+   },
+   {
+    "id": "auto-2",
+    "name": "シリコーン油(ペンタフェニルトリメチルトリシロキサン)",
+    "profile": {
+     "start": [
+      0,
+      1000.22
+     ],
+     "segments": [
+      {
+       "type": "arc",
+       "to": [
+        20,
+        1001.2602586838086
+       ],
+       "center": [
+        0,
+        1193
+       ],
+       "ccw": false
+      },
+      {
+       "type": "line",
+       "to": [
+        20,
+        1002.22
+       ]
+      },
+      {
+       "type": "line",
+       "to": [
+        0,
+        1002.22
+       ]
+      },
+      {
+       "type": "line",
+       "to": [
+        0,
+        1000.22
+       ]
+      }
+     ]
+    },
+    "material": {
+     "type": "model",
+     "nd": 1.579,
+     "vd": 30
+    },
+    "coatings": {},
+    "zOffset": 0,
+    "source": "auto",
+    "visible": true,
+    "surfaces": [
+     2,
+     3
+    ]
+   },
+   {
+    "id": "auto-3",
+    "name": "受け部の後壁(TPU 50 µm)",
+    "profile": {
+     "start": [
+      0,
+      1002.22
+     ],
+     "segments": [
+      {
+       "type": "line",
+       "to": [
+        20,
+        1002.22
+       ]
+      },
+      {
+       "type": "line",
+       "to": [
+        20,
+        1002.27
+       ]
+      },
+      {
+       "type": "line",
+       "to": [
+        0,
+        1002.27
+       ]
+      },
+      {
+       "type": "line",
+       "to": [
+        0,
+        1002.22
+       ]
+      }
+     ]
+    },
+    "material": {
+     "type": "model",
+     "nd": 1.505,
+     "vd": 50
+    },
+    "coatings": {},
+    "zOffset": 0,
+    "source": "auto",
+    "visible": true,
+    "surfaces": [
+     3,
+     4
+    ]
+   },
+   {
+    "id": "auto-4",
+    "name": "粘着剤(PSA 25 µm)",
+    "profile": {
+     "start": [
+      0,
+      1002.27
+     ],
+     "segments": [
+      {
+       "type": "line",
+       "to": [
+        20,
+        1002.27
+       ]
+      },
+      {
+       "type": "line",
+       "to": [
+        20,
+        1002.295
+       ]
+      },
+      {
+       "type": "line",
+       "to": [
+        0,
+        1002.295
+       ]
+      },
+      {
+       "type": "line",
+       "to": [
+        0,
+        1002.27
+       ]
+      }
+     ]
+    },
+    "material": {
+     "type": "model",
+     "nd": 1.474,
+     "vd": 55
+    },
+    "coatings": {},
+    "zOffset": 0,
+    "source": "auto",
+    "visible": true,
+    "surfaces": [
+     4,
+     5
+    ]
+   },
+   {
+    "id": "auto-5",
+    "name": "後部レンズ(PC と仮定)",
+    "profile": {
+     "start": [
+      0,
+      1002.295
+     ],
+     "segments": [
+      {
+       "type": "line",
+       "to": [
+        20,
+        1002.295
+       ]
+      },
+      {
+       "type": "line",
+       "to": [
+        20,
+        1004.2656608895643
+       ]
+      },
+      {
+       "type": "arc",
+       "to": [
+        0,
+        1004.0949999999998
+       ],
+       "center": [
+        0,
+        2176.095
+       ],
+       "ccw": true
+      },
+      {
+       "type": "line",
+       "to": [
+        0,
+        1002.295
+       ]
+      }
+     ]
+    },
+    "material": {
+     "type": "model",
+     "nd": 1.586,
+     "vd": 30
+    },
+    "coatings": {},
+    "zOffset": 0,
+    "source": "auto",
+    "visible": true,
+    "surfaces": [
+     5,
+     6
+    ]
+   },
+   {
+    "id": "auto-barrel",
+    "name": "ハウジング",
+    "profile": {
+     "start": [
+      20.02000000000011,
+      999
+     ],
+     "segments": [
+      {
+       "type": "line",
+       "to": [
+        21.52000000000011,
+        999
+       ]
+      },
+      {
+       "type": "line",
+       "to": [
+        21.52000000000011,
+        1005.2656608895643
+       ]
+      },
+      {
+       "type": "line",
+       "to": [
+        20.02000000000011,
+        1005.2656608895643
+       ]
+      },
+      {
+       "type": "line",
+       "to": [
+        20.02000000000011,
+        999
+       ]
+      }
+     ]
+    },
+    "material": {
+     "type": "opaque",
+     "kind": "anodized"
+    },
+    "coatings": {},
+    "zOffset": 0,
+    "source": "auto",
+    "visible": true
+   },
+   {
+    "id": "rim",
+    "name": "フロントリム(有効径 Φ37)",
+    "profile": {
+     "start": [
+      18.5,
+      999.3
+     ],
+     "segments": [
+      {
+       "type": "line",
+       "to": [
+        20,
+        999.3
+       ]
+      },
+      {
+       "type": "line",
+       "to": [
+        20,
+        999.8
+       ]
+      },
+      {
+       "type": "line",
+       "to": [
+        18.5,
+        999.8
+       ]
+      },
+      {
+       "type": "line",
+       "to": [
+        18.5,
+        999.3
+       ]
+      }
+     ]
+    },
+    "material": {
+     "type": "opaque",
+     "kind": "anodized"
+    },
+    "coatings": {},
+    "zOffset": 0,
+    "source": "draw",
+    "visible": true
+   }
+  ],
+  "env": "room",
+  "lights": [
+   {
+    "type": "rect",
+    "az": -30,
+    "el": 45,
+    "dist": 2.5,
+    "size": 60,
+    "power": 8
+   }
+  ],
+  "camera": {
+   "target": [
+    0,
+    0,
+    1002.1328304447821
+   ],
+   "azimuth": 30,
+   "elevation": 15,
+   "distance": 137.72800000000072,
+   "fov": 30
+  },
+  "res": "m",
+  "threshold": 2,
+  "passes": 32,
+  "autoParts": {
+   "iris": false,
+   "barrel": true
+  }
+ }
+}

@@ -4,7 +4,7 @@ import { partsFromSystem, validateScene, OPAQUE, newId, placedProfile } from '..
 import { importProfiles } from '../../appearance/import.js';
 import { tessellate, bounds, segmentEvaluator } from '../../appearance/profile.js';
 import { COATINGS } from '../../appearance/thinfilm.js';
-import { ENV_PRESETS, defaultCamera } from '../../appearance/render.js';
+import { ENV_PRESETS, defaultCamera, internalVisibility } from '../../appearance/render.js';
 import { reflectanceVsAngle, reflectanceVsWavelength, lineProfile, boundaryContrast, contributionTable } from '../../appearance/analysis.js';
 import { buildTraceScene } from '../../appearance/nstrace.js';
 import { listPresets, refractiveIndex } from '../../core/glass.js';
@@ -354,6 +354,42 @@ export function initAppearance({ getSystem, getState, setState }) {
     if (!rows.length) t.append(h('tr', {}, h('td', {}, '反射光は写っていません')));
   }
 
+  // ---------- 内部界面の見え方マップ ----------
+  let mapTag = 2e9;
+  async function internalMap() {
+    const btn = $('ap-map-btn'), out = $('ap-map');
+    const tag = ++mapTag;
+    btn.disabled = true;
+    const base = { ...renderState() };
+    const [w, hh] = [Math.round(base.width / 2), Math.round(base.height / 2)];
+    const passes = 16;
+    out.replaceChildren(h('p', { class: 'note' }, '計算中…(通常の画像と、内部界面の反射を消した画像を描いて比べます)'));
+    try {
+      const a = await renderStill(pool, { ...base, width: w, height: hh }, passes, tag);
+      const b = a && (await renderStill(pool, { ...base, width: w, height: hh, suppressInternal: true }, passes, tag));
+      if (!a || !b || tag !== mapTag) return;
+      const thr = (st.threshold ?? 2) / 100;
+      const v = internalVisibility(a, b, thr);
+      const c = h('canvas', { class: 'ap-map-canvas', title: '赤 = 閾値以上、黄 = 閾値の 1/4 以上' });
+      drawBuffer(c, a, { auto: true });
+      const ctx = c.getContext('2d'), img = ctx.getImageData(0, 0, w, hh);
+      for (let i = 0; i < v.C.length; i++) {
+        const x = Math.abs(v.C[i]) / thr;
+        if (x < 0.25) continue;
+        const k = i * 4, t = Math.min(1, x);
+        const col = x >= 1 ? [255, 40, 40] : [255, 200, 0];
+        for (let q = 0; q < 3; q++) img.data[k + q] = Math.round(img.data[k + q] * (1 - 0.7 * t) + col[q] * 0.7 * t);
+      }
+      ctx.putImageData(img, 0, 0);
+      const verdict = Math.abs(v.max) >= thr;
+      out.replaceChildren(
+        h('div', { class: `ap-badge ${verdict ? 'vis' : 'invis'}` }, verdict ? '内部界面が見える部分があります' : '内部界面は見えにくい'),
+        h('div', {}, `内部界面による明るさの変化: 最大 ${v.max >= 0 ? '+' : ''}${fmt(v.max * 100, 2)} %、閾値 ±${fmt(thr * 100, 2)} % を超える画素 ${fmt(v.fraction * 100, 2)} %`),
+        c,
+        h('p', { class: 'note' }, '内部界面 = 部品どうしが接する面(接着面・膜と液体など)。その反射だけを 0 にした画像との差を、画素ごとのウェーバーコントラストで示します。'));
+    } finally { btn.disabled = false; }
+  }
+
   // ---------- 角度一覧 ----------
   async function contactSheet() {
     const dlg = $('ap-dialog');
@@ -416,6 +452,7 @@ export function initAppearance({ getSystem, getState, setState }) {
     $('ap-face').addEventListener('change', plotReflectance);
     $('ap-angle').addEventListener('change', plotReflectance);
     $('ap-sheet').addEventListener('click', contactSheet);
+    $('ap-map-btn').addEventListener('click', internalMap);
     $('ap-exposure').addEventListener('input', () => { $('ap-auto').checked = false; view.setExposure(2 ** +$('ap-exposure').value, false); });
     $('ap-auto').addEventListener('change', () => view.setExposure(2 ** +$('ap-exposure').value, $('ap-auto').checked));
     view = createRenderView($('ap-canvas'), pool, {
@@ -439,7 +476,8 @@ export function initAppearance({ getSystem, getState, setState }) {
       st.sysSig = sig; setState(st);
       startRender(true);
     },
-    reload() { if (started) { if (!st.parts) regenerate(); if (!st.camera) st.camera = defaultCamera(st.parts); $('ap-env').value = st.env; $('ap-res').value = st.res; renderParts(); renderLights(); renderFaces(); syncCameraInputs(); startRender(); } },
+    markSynced() { st.sysSig = sysSig(); setState(st); },
+    reload() { st.sysSig = sysSig(); if (started) { if (!st.parts) regenerate(); if (!st.camera) st.camera = defaultCamera(st.parts); $('ap-env').value = st.env; $('ap-res').value = st.res; renderParts(); renderLights(); renderFaces(); syncCameraInputs(); startRender(); } },
     state: () => st,
   };
 }
