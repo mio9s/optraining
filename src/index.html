@@ -7,7 +7,98 @@
 <!--APP_CSS-->
 </head>
 <body>
-<div id="app"></div>
+<header class="top">
+  <h1>optraining <span>光線追跡・結像・収差シミュレーター</span></h1>
+  <div class="top-actions">
+    <label class="field inline">サンプル系 <select id="sample"></select></label>
+    <button type="button" id="btn-focus" title="スクリーンを近軸像面(520 nm)へ移動します">スクリーンを像面へ合わせる</button>
+    <button type="button" id="btn-help" class="secondary">使い方</button>
+  </div>
+</header>
+
+<main class="layout">
+  <section class="panel" id="left" aria-labelledby="h-lde">
+    <h2 id="h-lde">① レンズデータ <small>(光は左 → 右へ進みます)</small></h2>
+    <div id="editor"></div>
+    <p class="hint">曲率半径: 曲率中心が右側なら正・左側なら負、平面は <code>inf</code>。厚み: 次の面までの距離。材質: その面の右側の媒質。</p>
+    <fieldset class="sysfields">
+      <legend>物体・スクリーン</legend>
+      <label class="field" title="物体面上の最大物体高(中心からの高さ)。物体パターンは一辺 2h の正方形に配置されます"><span>物体高 h</span><input id="obj-h" data-sysfield="objectHeight" type="text" inputmode="decimal"><small>mm</small></label>
+      <label class="field" title="スクリーン(正方形)の一辺の長さ"><span>スクリーン幅</span><input id="scr-w" data-sysfield="screenWidth" type="text" inputmode="decimal"><small>mm</small></label>
+      <label class="field" title="スクリーンの画素数(一辺)。8〜1024"><span>画素数</span><input id="scr-px" data-sysfield="screenPixels" type="text" inputmode="numeric"><small>px</small></label>
+      <div class="wls">波長: <span id="wl-list"></span><small>(自然光・無偏光)</small></div>
+    </fieldset>
+  </section>
+
+  <section class="panel" id="center">
+    <div class="panel-head">
+      <h2>② 断面図 <small>(子午面 y-z)</small></h2>
+      <div class="tools">
+        <label class="check"><input type="checkbox" id="show-ghost"> ゴースト光線</label>
+        <button type="button" id="btn-lens" class="secondary" title="物体側を省略してレンズ〜スクリーンを表示">レンズ付近</button>
+        <button type="button" id="btn-fit" class="secondary" title="ダブルクリックでも全体表示">全体表示</button>
+      </div>
+    </div>
+    <div class="legend" id="layout-legend"></div>
+    <canvas id="layout" aria-label="光学系の断面図"></canvas>
+    <p class="hint">ホイールで拡大縮小、ドラッグで移動。視野 0 / 70 / 100 % から各 7 本。× は遮蔽された位置。</p>
+
+    <div class="panel-head">
+      <h2>③ 結像</h2>
+      <div class="tools">
+        <button type="button" id="btn-image" class="primary">結像を計算</button>
+      </div>
+    </div>
+    <div class="imgctl">
+      <label class="field inline">物体パターン <select id="pattern"></select></label>
+      <label class="file">画像ファイルを読み込む…<input type="file" id="file" accept="image/*"></label>
+      <span id="file-info" class="muted"></span>
+    </div>
+    <div class="progress" id="progress" hidden><div class="bar"><i></i></div><span></span></div>
+    <div class="images">
+      <figure><canvas id="obj-canvas" aria-label="物体"></canvas><figcaption id="obj-cap">物体</figcaption></figure>
+      <figure><canvas id="img-canvas" aria-label="結像画像"></canvas><figcaption id="img-cap">結像画像(「結像を計算」を押してください)</figcaption></figure>
+    </div>
+    <div class="imgctl">
+      <label class="check"><input type="checkbox" id="c-direct" checked> 直接光</label>
+      <label class="check"><input type="checkbox" id="c-ghost" checked> ゴースト</label>
+      <label class="check"><input type="checkbox" id="c-stray" checked> 散乱光</label>
+      <label class="check"><input type="checkbox" id="c-raman" checked> ラマン光</label>
+      <label class="check" title="最も明るい画素が白になるよう自動で露出を合わせます"><input type="checkbox" id="c-auto" checked> 自動露出</label>
+      <label class="field inline" title="自動露出オフ時の明るさ倍率(F/5 相当で 1)">露出 <input type="range" id="exposure" min="-4" max="4" step="0.1" value="0"><output id="exposure-out">×1.0</output></label>
+      <label class="field inline" title="散乱・ラマン光は非常に弱いため、表示用に強調します">散乱強調 <select id="stray-gain"><option value="1">×1</option><option value="10">×10</option><option value="100" selected>×100</option><option value="1000">×1000</option><option value="10000">×10⁴</option></select></label>
+    </div>
+    <div id="budget"></div>
+  </section>
+
+  <section class="panel" id="right">
+    <div class="tabs" role="tablist">
+      <button type="button" role="tab" data-tab="chroma" aria-selected="true">色収差</button>
+      <button type="button" role="tab" data-tab="zern">ゼルニケ</button>
+      <button type="button" role="tab" data-tab="scatter">散乱の公式</button>
+      <button type="button" role="tab" data-tab="settings">設定</button>
+    </div>
+    <div class="tab" id="tab-chroma" role="tabpanel"></div>
+    <div class="tab" id="tab-zern" role="tabpanel" hidden></div>
+    <div class="tab" id="tab-scatter" role="tabpanel" hidden></div>
+    <div class="tab" id="tab-settings" role="tabpanel" hidden></div>
+  </section>
+</main>
+
+<dialog id="help">
+  <h2>使い方</h2>
+  <ol>
+    <li><b>① レンズデータ</b>で光学系を入力します。1 行 = 1 面。先頭が物体面、末尾がスクリーンです。「＋」で面を挿入、「✕」で削除、「↑↓」で並べ替え。</li>
+    <li>曲率半径は <code>inf</code> で平面。材質は「その面の右側」の媒質です(レンズの最後の面は通常「空気」)。カスタムでは nd とアッベ数 νd を入力します。</li>
+    <li>アイリス(絞り)は独立した行として好きな位置に置けます。直径を小さくすると光束が絞られます。</li>
+    <li>入力が不正なセルは赤枠になり、計算は直前の正しい状態のまま続きます。</li>
+    <li><b>② 断面図</b>は入力に合わせて自動更新されます。青 450 nm / 緑 520 nm / 赤 620 nm。</li>
+    <li><b>③ 結像</b>: パターンを選ぶか画像を読み込み、「結像を計算」を押します。PSF(回折または幾何)を畳み込んだ像、ゴースト、散乱光、ラマン光を合成表示します。</li>
+    <li>右側のタブで色収差、ゼルニケ係数、散乱の各公式、散乱の設定を確認・変更できます。</li>
+  </ol>
+  <p class="note">単位: 長さ mm、波長 µm(表示は nm)。座標: 光軸 +z(右)、+y(上)。曲率半径は曲率中心が +z 側で正。</p>
+  <form method="dialog"><button class="primary">閉じる</button></form>
+</dialog>
 <!--APP_JS-->
 </body>
 </html>

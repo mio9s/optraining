@@ -78,3 +78,33 @@ export function defaultSystem() {
 // 既定系: 薄肉色消し条件で設計した BK7/SF5 アクロマート(f≈51 mm, 0.45/0.62 µm で縦色収差を相殺)。
 // 後側距離は paraxialTrace(0.52 µm) の近軸像位置。
 const DEFAULT_BACK = 62.80;
+
+/** サンプル系 */
+export const SAMPLE_SYSTEMS = {
+  achromat: { label: 'アクロマート(BK7 + SF5、既定)', make: () => defaultSystem() },
+  bk7: {
+    label: 'BK7 平凸単レンズ(f = 100 mm)',
+    make: () => {
+      const air = { type: 'air' };
+      return {
+        surfaces: [
+          { kind: 'object', radius: Infinity, thickness: 1000, material: air, diameter: 30 },
+          { kind: 'iris', radius: Infinity, thickness: 0, material: air, diameter: 20 },
+          { kind: 'surface', radius: 51.68, thickness: 4, material: { type: 'preset', name: 'N-BK7' }, diameter: 25 },
+          { kind: 'surface', radius: Infinity, thickness: 107.683, material: air, diameter: 25 },
+          { kind: 'screen', radius: Infinity, thickness: 0, material: air, diameter: 20 },
+        ],
+        object: { height: 30 }, screen: { width: 8, pixels: 256 }, wavelengths: [...WAVELENGTHS],
+      };
+    },
+  },
+  nodisp: {
+    label: '無分散ガラス単レンズ(色収差 0 の確認用)',
+    make: () => {
+      const s = SAMPLE_SYSTEMS.bk7.make();
+      s.surfaces[2].material = { type: 'model', nd: 1.5168, vd: 1e12 };
+      s.surfaces[3].thickness = 108.474; // 近軸像面(n = nd 一定)
+      return s;
+    },
+  },
+};

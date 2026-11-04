@@ -48,3 +48,14 @@ export function chromatic(sys) {
     lateralColor: chiefHeights[lo] - chiefHeights[hi],
   };
 }
+
+/** スクリーンを近軸像面(波長 lambda)へ移動した系を返す */
+export function focusScreen(sys, lambda) {
+  const s = structuredClone(sys);
+  const r = paraxialTrace(s, lambda);
+  const z = surfaceZ(s);
+  const k = s.surfaces.length - 2;
+  const t = r.imageZ - z[k];
+  if (Number.isFinite(t) && t >= 0) s.surfaces[k].thickness = Math.round(t * 1e4) / 1e4;
+  return s;
+}
