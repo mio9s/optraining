@@ -4,7 +4,6 @@ import { placedProfile, OPAQUE } from './scene.js';
 import { refractiveIndex } from '../core/glass.js';
 import { COATINGS } from './thinfilm.js';
 
-const EPS_SIDE = 1e-6; // 媒質判定のための面からのずらし量 [mm]
 export const T_MIN = 1e-6; // 自己交差を避ける最小距離 [mm]
 const MERGE = 1e-6; // 同じ位置とみなす交点距離の差 [mm]
 
@@ -168,12 +167,11 @@ function coatingLayers(c) {
  * 返り値: {nBefore, nAfter, before, after (entry|null), normal(入射側を向く単位法線), cosI, layers(入射側→射出側の順), opaque}
  */
 export function interfaceAt(scene, hit, d, lambdaUm) {
-  const P = hit.point;
   const h = hit.primary;
-  let N = h.normal;
-  // 外向き法線の向きで前後を決める
-  const outside = scene.mediumAt(P[0] + N[0] * EPS_SIDE, P[1] + N[1] * EPS_SIDE, P[2] + N[2] * EPS_SIDE);
-  const inside = scene.mediumAt(P[0] - N[0] * EPS_SIDE, P[1] - N[1] * EPS_SIDE, P[2] - N[2] * EPS_SIDE);
+  const N = h.normal;
+  // 部品は重ならないので、面の内側 = 当たった部品、外側 = 同じ位置で当たった共有面の相手(なければ空気)
+  const other = hit.hits.find((x) => x.entry !== h.entry);
+  const inside = h.entry, outside = other ? other.entry : null;
   const entering = d[0] * N[0] + d[1] * N[1] + d[2] * N[2] < 0;
   const before = entering ? outside : inside, after = entering ? inside : outside;
   const toward = entering ? N : [-N[0], -N[1], -N[2]]; // 入射側を向く法線

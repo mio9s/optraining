@@ -9,6 +9,7 @@ export const OPAQUE = {
   anodized: { label: '黒アルマイト', diffuse: 0.05, specular: 0.04 },
   aluminum: { label: 'アルミ(鏡面)', diffuse: 0.05, specular: 0.85 },
   white: { label: '白(拡散)', diffuse: 0.8, specular: 0 },
+  absorber: { label: '完全吸収体(光トラップ)', diffuse: 0, specular: 0 },
 };
 
 let idSeq = 0;
