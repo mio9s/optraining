@@ -1,0 +1,4 @@
+:root { --bg:#fafafa; --fg:#1d1d1f; --panel:#fff; --line:#d8d8dc; --muted:#6e6e73; --accent:#2b6cb0; --err:#d93025; }
+@media (prefers-color-scheme: dark) { :root { --bg:#16171a; --fg:#e8e8ea; --panel:#1f2024; --line:#3a3b40; --muted:#9a9aa0; --accent:#6aa5ff; --err:#ff6b5e; } }
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--fg); font:13px/1.45 system-ui, sans-serif; }

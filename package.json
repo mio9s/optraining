@@ -1,0 +1,18 @@
+{
+  "name": "optraining",
+  "version": "0.1.0",
+  "description": "Single-file HTML optical ray-tracing simulator",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "build": "node scripts/build.mjs",
+    "import-glass": "node scripts/import-glass.mjs"
+  },
+  "repository": { "type": "git", "url": "git+https://github.com/mio9s/optraining.git" },
+  "license": "MIT",
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "uplot": "^1.6.32"
+  }
+}
