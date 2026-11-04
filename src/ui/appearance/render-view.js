@@ -137,11 +137,19 @@ export function createRenderView(canvas, pool, cb = {}) {
     const ex = drawBuffer(canvas, buf, { exposure, auto, line: buf.w === state.width ? line : null, scale: 1 });
     cb.onExposure?.(ex);
   };
+  let previewBusy = false, previewPending = false;
+  /** ドラッグ中のプレビュー: 前のフレームが終わるまで次を出さず、最新の視点だけを描く */
+  async function preview() {
+    if (previewBusy) { previewPending = true; return; }
+    previewBusy = true;
+    do { previewPending = false; await restart(true); } while (previewPending);
+    previewBusy = false;
+  }
   async function restart(lowRes) {
     if (!state) return;
     const tag = ++gen;
     pool.cancel(tag - 1);
-    const s = lowRes ? 4 : 1;
+    const s = lowRes ? 3 : 1;
     const w = Math.max(16, Math.round(state.width / s)), h = Math.max(12, Math.round(state.height / s));
     try {
       const b = await renderStill(pool, { ...state, width: w, height: h }, lowRes ? 1 : maxPasses, tag, (bb) => {
@@ -168,7 +176,7 @@ export function createRenderView(canvas, pool, cb = {}) {
     state.camera.azimuth = drag.az - dx * 0.4;
     state.camera.elevation = Math.max(-89, Math.min(89, drag.el + dy * 0.4));
     cb.onCamera?.(state.camera);
-    restart(true);
+    preview();
   });
   const end = () => {
     if (!drag) return;
@@ -183,7 +191,7 @@ export function createRenderView(canvas, pool, cb = {}) {
     e.preventDefault();
     state.camera.distance *= Math.exp(e.deltaY * 0.001);
     cb.onCamera?.(state.camera);
-    restart(true); clearTimeout(idleTimer); idleTimer = setTimeout(() => restart(false), 250);
+    preview(); clearTimeout(idleTimer); idleTimer = setTimeout(() => restart(false), 250);
   }, { passive: false });
 
   return {

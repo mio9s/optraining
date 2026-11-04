@@ -179,3 +179,23 @@ input.num { width: 64px; text-align: right; }
 .pe-pt input { width: 74px; }
 @media (max-width: 900px) { .pe-body { grid-template-columns: 1fr; } }
 .ap-map-canvas { width: 100%; aspect-ratio: 4 / 3; border-radius: 4px; background: #000; margin: 4px 0; }
+
+/* ---- モード表示 ---- */
+:root { --mode-imaging: #2b6cb0; --mode-appearance: #7c3aed; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --mode-imaging: #6aa5ff; --mode-appearance: #b794f6; } }
+body { --mode: var(--mode-imaging); }
+body[data-mode=appearance] { --mode: var(--mode-appearance); }
+.top { border-bottom: 3px solid var(--mode); }
+.modeswitch { display: flex; gap: 0; border: 2px solid var(--mode); border-radius: 10px; overflow: hidden; }
+.modeswitch button { border: 0; border-radius: 0; padding: 6px 18px; display: flex; flex-direction: column; align-items: flex-start; line-height: 1.25; background: var(--panel); color: var(--muted); min-width: 190px; }
+.modeswitch button + button { border-left: 2px solid var(--mode); }
+.modeswitch button b { font-size: 14px; color: var(--fg); }
+.modeswitch button small { font-size: 11px; }
+.modeswitch button[data-view=imaging][aria-selected=true] { background: var(--mode-imaging); color: #fff; }
+.modeswitch button[data-view=appearance][aria-selected=true] { background: var(--mode-appearance); color: #fff; }
+.modeswitch button[aria-selected=true] b { color: #fff; }
+.modeswitch button[aria-selected=false]:hover { background: color-mix(in srgb, var(--mode) 10%, var(--panel)); }
+.modebar { background: var(--mode); color: #fff; padding: 6px 16px; font-size: 13px; display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+.modebar b { font-size: 15px; }
+.modebar span { opacity: 0.9; }
+.panel h2 { border-left: 4px solid var(--mode); padding-left: 8px; }

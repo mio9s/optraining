@@ -47,7 +47,60 @@ function solve(n0, layers, ns, cos0, lambda, pol) {
   return { R, T };
 }
 
+/** 無コート界面の無偏光反射率だけ(割り当てなしの最速版) */
+export function bareR(n1, n2, cosI) {
+  const c = cosI < 1 ? cosI : 1;
+  const st = (n1 / n2) * Math.sqrt(Math.max(0, 1 - c * c));
+  if (st >= 1) return 1;
+  const ct = Math.sqrt(1 - st * st);
+  const rs = (n1 * c - n2 * ct) / (n1 * c + n2 * ct), rp = (n1 * ct - n2 * c) / (n1 * ct + n2 * c);
+  return (rs * rs + rp * rp) / 2;
+}
+
+/** 無コート界面の閉じた式(高速) */
+function bare(n1, n2, cosI) {
+  const c = Math.min(1, Math.abs(cosI));
+  const sinT = (n1 / n2) * Math.sqrt(Math.max(0, 1 - c * c));
+  if (sinT >= 1) return { Rs: 1, Rp: 1, R: 1, Ts: 0, Tp: 0, T: 0 };
+  const ct = Math.sqrt(1 - sinT * sinT);
+  const rs = (n1 * c - n2 * ct) / (n1 * c + n2 * ct), rp = (n1 * ct - n2 * c) / (n1 * ct + n2 * c);
+  const Rs = rs * rs, Rp = rp * rp;
+  return { Rs, Rp, R: (Rs + Rp) / 2, Ts: 1 - Rs, Tp: 1 - Rp, T: 1 - (Rs + Rp) / 2 };
+}
+
+/**
+ * 実数だけの高速版: 吸収のない層で、どの層でも全反射が起きない(cosθ が実数)場合。
+ * 特性行列は [[A, iB], [iC, D]](A, B, C, D は実数)の形を保つ。
+ */
+function realFast(n0, layers, ns, cos0, lambda, pol) {
+  const sin0 = Math.sqrt(Math.max(0, 1 - cos0 * cos0));
+  const cosOf = (n) => { const s = (n0 * sin0) / n; const q = 1 - s * s; return q > 0 ? Math.sqrt(q) : -1; };
+  const eta = (n, c) => (pol === 's' ? n * c : n / c);
+  let A = 1, B = 0, C = 0, D = 1;
+  for (let i = 0; i < layers.length; i++) {
+    const L = layers[i], c = cosOf(L.n);
+    if (c < 0) return null;
+    const e = eta(L.n, c), dl = (2 * Math.PI * L.n * L.d * 1e-3 * c) / lambda;
+    const cd = Math.cos(dl), sd = Math.sin(dl);
+    // [[A, iB], [iC, D]] × [[cd, i sd/e], [i e sd, cd]]
+    const nA = A * cd - B * e * sd, nB = (A * sd) / e + B * cd, nC = C * cd + D * e * sd, nD = D * cd - (C * sd) / e;
+    A = nA; B = nB; C = nC; D = nD;
+  }
+  const cs = cosOf(ns);
+  if (cs < 0) return null;
+  const e0 = eta(n0, cos0), es = eta(ns, cs);
+  const nr = e0 * A - D * es, ni = e0 * B * es - C, dr = e0 * A + D * es, di = e0 * B * es + C;
+  const den = dr * dr + di * di;
+  return { R: Math.min(1, (nr * nr + ni * ni) / den), T: (4 * e0 * es) / den };
+}
+
 export function thinFilm(n0, layers, ns, cos0, lambda) {
+  if (!layers || !layers.length) return bare(n0, ns, cos0);
+  {
+    const c0 = Math.min(1, Math.abs(cos0));
+    const fs = realFast(n0, layers, ns, c0, lambda, 's'), fp = fs && realFast(n0, layers, ns, c0, lambda, 'p');
+    if (fs && fp) return { Rs: fs.R, Rp: fp.R, R: (fs.R + fp.R) / 2, Ts: fs.T, Tp: fp.T, T: (fs.T + fp.T) / 2 };
+  }
   const s = solve(n0, layers ?? [], ns, Math.min(1, Math.abs(cos0)), lambda, 's');
   const p = solve(n0, layers ?? [], ns, Math.min(1, Math.abs(cos0)), lambda, 'p');
   return { Rs: s.R, Rp: p.R, R: (s.R + p.R) / 2, Ts: s.T, Tp: p.T, T: (s.T + p.T) / 2 };

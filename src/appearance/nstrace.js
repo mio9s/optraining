@@ -7,15 +7,59 @@ import { COATINGS } from './thinfilm.js';
 export const T_MIN = 1e-6; // 自己交差を避ける最小距離 [mm]
 const MERGE = 1e-6; // 同じ位置とみなす交点距離の差 [mm]
 
-/** 部品群から追跡用シーンを作る */
+/**
+ * 部品群から追跡用シーンを作る。
+ * 光軸上に中心がある円弧(球面)と直線(平面・円筒・円錐)は、分割せず 1 つの図形として厳密に交差させる(高速・高精度)。
+ * それ以外(ベジェ・スプライン・非球面・軸外中心の円弧)は細かい円錐台に分割して BVH で探す。
+ */
 export function buildTraceScene(parts) {
   const list = parts.filter((p) => p.visible !== false).map((p, pi) => {
-    const all = tessellate(placedProfile(p));
-    const edges = all.filter((e) => !e.onAxis);
+    const prof = placedProfile(p);
+    const all = tessellate(prof);
+    const prims = [];
+    const exact = new Set();
+    let cur = prof.start;
+    prof.segments.forEach((sg, si) => {
+      const from = cur; cur = sg.to;
+      const mine = all.filter((e) => e.seg === si && !e.onAxis);
+      if (!mine.length) return;
+      if (sg.type === 'line') { prims.push({ kind: 'edge', edge: mine[0] }); exact.add(si); return; }
+      if (sg.type === 'arc' && Math.abs(sg.center[0]) < 1e-12) {
+        const zc = sg.center[1], R = Math.hypot(from[0] - sg.center[0], from[1] - zc);
+        const ang = (q) => Math.atan2(q[0], q[1] - zc);
+        const a0 = ang(from), a1 = ang(sg.to);
+        const m = mine[Math.floor(mine.length / 2)], mp = [(m.a[0] + m.b[0]) / 2, (m.a[1] + m.b[1]) / 2];
+        const radial = [mp[0], mp[1] - zc];
+        const sign = (radial[0] * (m.na[0] + m.nb[0]) + radial[1] * (m.na[1] + m.nb[1])) >= 0 ? 1 : -1; // 外向き = 中心から外か
+        prims.push({ kind: 'sphere', seg: si, zc, R, a0: Math.min(a0, a1), a1: Math.max(a0, a1), sign,
+          box: { z0: Math.min(...mine.map((e) => Math.min(e.a[1], e.b[1]))), z1: Math.max(...mine.map((e) => Math.max(e.a[1], e.b[1]))), r0: Math.min(...mine.map((e) => Math.min(e.a[0], e.b[0]))), r1: Math.max(...mine.map((e) => Math.max(e.a[0], e.b[0]))) } });
+        exact.add(si);
+      }
+    });
+    const edges = all.filter((e) => !e.onAxis && !exact.has(e.seg));
     const nodes = buildBVH(edges);
-    return { part: p, index: pi, all, edges, nodes };
+    let box = null;
+    for (const e of all) { const b = edgeBox(e); box = box ? mergeBox(box, b) : b; }
+    return { part: p, index: pi, all, edges, nodes, prims, box };
   });
   return { list, mediumAt: (x, y, z) => mediumAt(list, x, y, z) };
+}
+
+/** 光軸中心の球面との交点 */
+function sphereHits(pr, o, d, tmin, out) {
+  const ox = o[0], oy = o[1], oz = o[2] - pr.zc;
+  const b = ox * d[0] + oy * d[1] + oz * d[2], c = ox * ox + oy * oy + oz * oz - pr.R * pr.R;
+  const D = b * b - c;
+  if (D < 0) return;
+  const sq = Math.sqrt(D);
+  for (const t of [-b - sq, -b + sq]) {
+    if (!(t >= tmin)) continue;
+    const x = o[0] + t * d[0], y = o[1] + t * d[1], z = o[2] + t * d[2];
+    const rho = Math.hypot(x, y), a = Math.atan2(rho, z - pr.zc);
+    if (a < pr.a0 - 1e-12 || a > pr.a1 + 1e-12) continue;
+    const k = pr.sign / pr.R;
+    out.push({ t, x, y, rho, normal: [x * k, y * k, (z - pr.zc) * k] });
+  }
 }
 
 function edgeBox(e) {
@@ -108,7 +152,20 @@ export function intersect(scene, o, d, tmin = T_MIN, tmax = Infinity) {
   const found = [];
   const tmp = [];
   for (const entry of scene.list) {
-    const { nodes, edges } = entry;
+    const { nodes, edges, prims } = entry;
+    if (!entry.box || !boxHit(entry.box, o, d, tmin, best + MERGE)) continue;
+    for (const pr of prims) {
+      tmp.length = 0;
+      if (pr.kind === 'sphere') { if (!boxHit(pr.box, o, d, tmin, best + MERGE)) continue; sphereHits(pr, o, d, tmin, tmp); }
+      else edgeHits(pr.edge, o, d, tmin, tmp);
+      for (let q = 0; q < tmp.length; q++) {
+        const h = tmp[q];
+        if (h.t > best + MERGE) continue;
+        h.entry = entry; h.edge = pr.edge ?? pr.segRef ?? (pr.segRef = { seg: pr.seg });
+        found.push(h);
+        if (h.t < best) best = h.t;
+      }
+    }
     if (!nodes.length) continue;
     const stack = [0];
     while (stack.length) {
@@ -118,8 +175,11 @@ export function intersect(scene, o, d, tmin = T_MIN, tmax = Infinity) {
       for (let i = n.lo; i < n.hi; i++) {
         tmp.length = 0;
         edgeHits(edges[i], o, d, tmin, tmp);
-        for (const h of tmp) if (h.t <= best + MERGE) {
-          found.push({ entry, edge: edges[i], ...h });
+        for (let q = 0; q < tmp.length; q++) {
+          const h = tmp[q];
+          if (h.t > best + MERGE) continue;
+          h.entry = entry; h.edge = edges[i];
+          found.push(h);
           if (h.t < best) best = h.t;
         }
       }
@@ -137,6 +197,7 @@ export function intersect(scene, o, d, tmin = T_MIN, tmax = Infinity) {
 
 /** 外向き法線(元の曲線の法線を補間) */
 function normal3(h) {
+  if (h.normal) return h.normal; // 球面(厳密)
   const e = h.edge, s = h.s;
   let nr = e.na[0] * (1 - s) + e.nb[0] * s, nz = e.na[1] * (1 - s) + e.nb[1] * s;
   const L = Math.hypot(nr, nz) || 1; nr /= L; nz /= L;

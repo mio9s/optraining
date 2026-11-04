@@ -357,13 +357,23 @@ const appearanceState = (() => {
 })();
 function saveAppearance() { try { localStorage.setItem(AP_KEY, toJSON(appearanceState)); } catch { /* */ } }
 const appearance = initAppearance({ getSystem: () => state.valid, getState: () => appearanceState, setState: () => saveAppearance() });
-document.querySelectorAll('.viewtabs [role=tab]').forEach((b) => b.addEventListener('click', () => {
-  document.querySelectorAll('.viewtabs [role=tab]').forEach((x) => x.setAttribute('aria-selected', String(x === b)));
-  $('view-imaging').hidden = b.dataset.view !== 'imaging';
-  $('view-appearance').hidden = b.dataset.view !== 'appearance';
-  for (const id of ['btn-focus', 'sample']) $(id).closest('label, button').hidden = b.dataset.view !== 'imaging';
-  if (b.dataset.view === 'appearance') appearance.show(); else runAnalysis(true);
-}));
+const MODE_TEXT = {
+  imaging: ['結像・収差モード', 'レンズデータを入力して、像の写り(PSF)・収差・色収差を解析します。', '① レンズデータ → ② 断面図 → ③ 結像'],
+  appearance: ['外観モード', 'レンズを外から色々な角度で見て、部品どうしの界面が境界として見えるかを検証します。', '① 部品 → ② 外観(ドラッグで回転) → ③ 数値'],
+};
+function setMode(mode, first = false) {
+  document.querySelectorAll('.modeswitch [role=tab]').forEach((x) => x.setAttribute('aria-selected', String(x.dataset.view === mode)));
+  document.body.dataset.mode = mode;
+  $('view-imaging').hidden = mode !== 'imaging';
+  $('view-appearance').hidden = mode !== 'appearance';
+  for (const id of ['btn-focus', 'sample']) $(id).closest('label, button').hidden = mode !== 'imaging';
+  const [name, desc, flow] = MODE_TEXT[mode];
+  $('modebar').innerHTML = `<b>いまのモード: ${name}</b><span>${desc}</span><span>${flow}</span>`;
+  document.title = `${name} — optraining`;
+  try { localStorage.setItem('optraining.mode', mode); } catch { /* */ }
+  if (mode === 'appearance') appearance.show(); else if (!first) runAnalysis(true);
+}
+document.querySelectorAll('.modeswitch [role=tab]').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.view)));
 
 // 前回の状態を復元
 state.sampleKey = 'achromat';
@@ -377,3 +387,4 @@ try {
 } catch { /* 復元できなければ既定系 */ }
 syncSysFields();
 runAnalysis(true);
+setMode((() => { try { return localStorage.getItem('optraining.mode') === 'appearance' ? 'appearance' : 'imaging'; } catch { return 'imaging'; } })(), true);

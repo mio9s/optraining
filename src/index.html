@@ -9,9 +9,9 @@
 <body>
 <header class="top">
   <h1>optraining <span>光線追跡・結像・収差・外観シミュレーター</span></h1>
-  <nav class="viewtabs" role="tablist" aria-label="画面の切り替え">
-    <button type="button" role="tab" data-view="imaging" aria-selected="true">結像・収差</button>
-    <button type="button" role="tab" data-view="appearance" aria-selected="false">外観(界面の見え方)</button>
+  <nav class="modeswitch" role="tablist" aria-label="モードの切り替え">
+    <button type="button" role="tab" data-view="imaging" aria-selected="true"><b>結像・収差モード</b><small>像の写り・収差・色収差を解析</small></button>
+    <button type="button" role="tab" data-view="appearance" aria-selected="false"><b>外観モード</b><small>レンズを外から見た界面の見え方</small></button>
   </nav>
   <div class="top-actions">
     <label class="field inline">サンプル系 <select id="sample"></select></label>
@@ -21,6 +21,7 @@
     <button type="button" id="btn-help" class="secondary">使い方</button>
   </div>
 </header>
+<div class="modebar" id="modebar" role="status" aria-live="polite"></div>
 
 <main class="layout" id="view-imaging">
   <section class="panel" id="left" aria-labelledby="h-lde">
@@ -117,6 +118,7 @@
       <h2>② 外観</h2>
       <div class="tools">
         <label class="field inline">背景・照明 <select id="ap-env"></select></label>
+        <label class="field inline" title="標準: 4 パスで仕上げ(色は 1 パス目から正確)。高品質: 32 パスでノイズとギザギザを減らす。正確: 波長ごとに光路を分けて分散まで厳密に(遅い)">品質 <select id="ap-quality"><option value="standard">標準(速い)</option><option value="high">高品質</option><option value="exact">正確(分散を厳密に)</option></select></label>
         <label class="field inline">解像度 <select id="ap-res"><option value="s">320×240</option><option value="m">640×480</option><option value="l">960×720</option></select></label>
       </div>
     </div>

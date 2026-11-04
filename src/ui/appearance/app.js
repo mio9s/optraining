@@ -23,7 +23,7 @@ const fmt = (v, d = 3) => (Number.isFinite(v) ? String(+v.toFixed(d)) : '—');
 const PRESETS = listPresets();
 const RES = { s: [320, 240], m: [640, 480], l: [960, 720] };
 
-export const defaultAppearance = () => ({ parts: null, env: 'room', lights: [], camera: null, res: 'm', threshold: 2, passes: 32, autoParts: { iris: true, barrel: false } });
+export const defaultAppearance = () => ({ parts: null, env: 'room', lights: [], camera: null, res: 'm', threshold: 2, quality: 'standard', autoParts: { iris: true, barrel: false } });
 
 /** 面の名前(前面/後面/コバ/段) */
 export function faceLabel(part, seg) {
@@ -253,16 +253,18 @@ export function initAppearance({ getSystem, getState, setState }) {
   // ---------- 描画 ----------
   function renderState() {
     const [w, h0] = RES[st.res] ?? RES.m;
-    return { parts: st.parts.filter((p) => p.visible !== false), camera: st.camera, env: { type: st.env }, lights: worldLights(), width: w, height: h0 };
+    return { parts: st.parts.filter((p) => p.visible !== false), camera: st.camera, env: { type: st.env }, lights: worldLights(), width: w, height: h0, exactSpectral: st.quality === 'exact' };
   }
   function syncCameraInputs() {
     for (const k of ['azimuth', 'elevation', 'distance', 'fov']) $(`ap-cam-${k}`).value = fmt(st.camera[k], k === 'distance' ? 2 : 1);
   }
   function startRender(keepLine = false) {
     if (!validateScene(st.parts).ok) { $('ap-status').textContent = '部品にエラーがあるため描画できません'; return; }
-    view.setMaxPasses(st.passes);
+    view.setMaxPasses(st.quality === 'standard' ? 4 : 32);
     view.update(renderState(), { keepLine });
   }
+  /** 視点・照明だけの変更(部品リストは作り直さない) */
+  function viewChanged() { syncCameraInputs(); setState(st); startRender(); }
   function changed(geometry, refit = false) {
     if (refit) st.camera = defaultCamera(st.parts);
     renderParts(); syncCameraInputs(); setState(st);
@@ -362,7 +364,7 @@ export function initAppearance({ getSystem, getState, setState }) {
     btn.disabled = true;
     const base = { ...renderState() };
     const [w, hh] = [Math.round(base.width / 2), Math.round(base.height / 2)];
-    const passes = 16;
+    const passes = 4;
     out.replaceChildren(h('p', { class: 'note' }, '計算中…(通常の画像と、内部界面の反射を消した画像を描いて比べます)'));
     try {
       const a = await renderStill(pool, { ...base, width: w, height: hh }, passes, tag);
@@ -411,7 +413,7 @@ export function initAppearance({ getSystem, getState, setState }) {
       const myTag = ++tag;
       for (const it of items) {
         const s = { ...renderState(), camera: { ...st.camera, azimuth: it.az, elevation: it.el }, width: 200, height: 150 };
-        await renderStill(pool, s, 16, myTag, (b) => drawBuffer(it.c, b, { auto: true }));
+        await renderStill(pool, s, 4, myTag, (b) => drawBuffer(it.c, b, { auto: true }));
         if (myTag !== tag || !dlg.open) return;
       }
     };
@@ -426,9 +428,9 @@ export function initAppearance({ getSystem, getState, setState }) {
     if (!st.camera) st.camera = defaultCamera(st.parts);
     for (const [k, v] of Object.entries(ENV_PRESETS)) $('ap-env').append(h('option', { value: k }, v.label));
     $('ap-env').value = st.env;
-    $('ap-env').addEventListener('change', () => { st.env = $('ap-env').value; changed(false); });
+    $('ap-env').addEventListener('change', () => { st.env = $('ap-env').value; viewChanged(); });
     $('ap-res').value = st.res;
-    $('ap-res').addEventListener('change', () => { st.res = $('ap-res').value; changed(false); });
+    $('ap-res').addEventListener('change', () => { st.res = $('ap-res').value; viewChanged(); });
     $('ap-regen').addEventListener('click', () => { if (st.parts.some((p) => p.source !== 'auto') && !confirm('取り込み・描画した部品も消えます。レンズデータから作り直しますか?')) return; st.autoParts = { iris: $('ap-iris').checked, barrel: $('ap-barrel').checked }; regenerate(); changed(true); });
     $('ap-iris').checked = st.autoParts.iris; $('ap-barrel').checked = st.autoParts.barrel;
     $('ap-draw').addEventListener('click', () => {
@@ -444,8 +446,10 @@ export function initAppearance({ getSystem, getState, setState }) {
     });
     $('ap-add-point').addEventListener('click', () => { st.lights.push({ type: 'point', az: 40, el: 35, dist: 2.5, size: 4, power: 80 }); renderLights(); changed(false); });
     $('ap-add-rect').addEventListener('click', () => { st.lights.push({ type: 'rect', az: -30, el: 50, dist: 2.5, size: 60, power: 8 }); renderLights(); changed(false); });
-    for (const k of ['azimuth', 'elevation', 'distance', 'fov']) $(`ap-cam-${k}`).addEventListener('change', () => { const v = parseNumber($(`ap-cam-${k}`).value); if (Number.isFinite(v)) { st.camera[k] = v; changed(false); } });
-    $('ap-cam-reset').addEventListener('click', () => { st.camera = defaultCamera(st.parts); changed(false); });
+    for (const k of ['azimuth', 'elevation', 'distance', 'fov']) $(`ap-cam-${k}`).addEventListener('change', () => { const v = parseNumber($(`ap-cam-${k}`).value); if (Number.isFinite(v)) { st.camera[k] = v; viewChanged(); } });
+    $('ap-cam-reset').addEventListener('click', () => { st.camera = defaultCamera(st.parts); viewChanged(); });
+    $('ap-quality').value = st.quality ?? 'standard';
+    $('ap-quality').addEventListener('change', () => { st.quality = $('ap-quality').value; viewChanged(); });
     $('ap-line').addEventListener('change', () => view.setLineMode($('ap-line').checked));
     $('ap-threshold').value = String(st.threshold);
     $('ap-threshold').addEventListener('change', () => { const v = parseNumber($('ap-threshold').value); if (v > 0) { st.threshold = v; setState(st); const l = view.line(), b = view.buffer(); if (l && b) onLine(l, { Y: b.y.map((y, k) => (b.n[k] ? y / b.n[k] : 0)), w: b.w, h: b.h }); } });
@@ -456,7 +460,7 @@ export function initAppearance({ getSystem, getState, setState }) {
     $('ap-exposure').addEventListener('input', () => { $('ap-auto').checked = false; view.setExposure(2 ** +$('ap-exposure').value, false); });
     $('ap-auto').addEventListener('change', () => view.setExposure(2 ** +$('ap-exposure').value, $('ap-auto').checked));
     view = createRenderView($('ap-canvas'), pool, {
-      onProgress: (p, m, low) => { $('ap-status').textContent = low ? '回転中(粗い表示)…' : p < m ? `描画中… ${p}/${m} パス(止めておくと精細になります)` : `完了(${m} パス)`; },
+      onProgress: (p, m, low) => { $('ap-status').textContent = low ? '回転中(粗い表示)…' : p < m ? `精細化中… ${p}/${m} パス(色は 1 パス目から正しく表示されます)` : `完了(${m} パス)`; },
       onCamera: () => { syncCameraInputs(); setState(st); },
       onLine, onFrame,
       onExposure: (ex) => { $('ap-exposure-out').textContent = `×${ex < 10 ? ex.toFixed(2) : ex.toPrecision(3)}`; },

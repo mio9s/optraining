@@ -1,7 +1,7 @@
 // 外観のスペクトル描画(非逐次・分岐追跡、プログレッシブ)
 // 放射輝度の単位: 環境の「白」= 1(等エネルギースペクトル)。画像は線形 RGB(白 = 1)。
-import { intersect, interfaceAt, T_MIN, buildTraceScene } from './nstrace.js';
-import { thinFilm } from './thinfilm.js';
+import { intersect, interfaceAt, T_MIN, buildTraceScene, materialIndex } from './nstrace.js';
+import { thinFilm, bareR } from './thinfilm.js';
 import { refract, reflect } from '../core/trace.js';
 import { spectralToRGB, spectralToY, sampleLambda } from './color.js';
 import { bounds } from './profile.js';
@@ -109,6 +109,47 @@ export function presetLights(env, scene) {
   return [{ type: 'point', pos: [c[0] + s * 1.2, c[1] + s * 1.5, c[2] - s * 1.5], radius: s * 0.06, radiance: 60 }];
 }
 
+// ---------- 拡散面の照度(ノイズなしの近似) ----------
+// 環境光を余弦重みで積分した照度を法線方向の表にしておき、光源の直接光を足す(遮蔽は無視する近似)。
+const irrCache = new Map();
+function envIrradianceTable(env) {
+  const key = env?.fn ? env.fn : (env?.type ?? 'room');
+  let t = irrCache.get(key);
+  if (t) return t;
+  const NT = 16, NP = 32, S = 24;
+  t = new Float64Array(NT * NP);
+  for (let i = 0; i < NT; i++) for (let j = 0; j < NP; j++) {
+    const th = (Math.PI * (i + 0.5)) / NT, ph = (2 * Math.PI * (j + 0.5)) / NP;
+    const N = [Math.sin(th) * Math.cos(ph), Math.cos(th), Math.sin(th) * Math.sin(ph)];
+    const t1 = norm(Math.abs(N[0]) < 0.9 ? cross(N, [1, 0, 0]) : cross(N, [0, 1, 0])), t2 = cross(N, t1);
+    let E = 0;
+    for (let a = 0; a < S; a++) for (let b = 0; b < S; b++) {
+      const u1 = (a + 0.5) / S, u2 = (b + 0.5) / S, r = Math.sqrt(u1), q = 2 * Math.PI * u2;
+      const wi = norm(addS(addS(addS([0, 0, 0], t1, r * Math.cos(q)), t2, r * Math.sin(q)), N, Math.sqrt(1 - u1)));
+      E += envRadiance(env, wi);
+    }
+    t[i * NP + j] = (Math.PI * E) / (S * S); // E = π · 余弦重み平均
+  }
+  irrCache.set(key, t);
+  return t;
+}
+function diffuseRadiance(ctx, P, N, albedo) {
+  const t = envIrradianceTable(ctx.env), NT = 16, NP = 32;
+  const th = Math.acos(Math.max(-1, Math.min(1, N[1]))), ph = (Math.atan2(N[2], N[0]) + 2 * Math.PI) % (2 * Math.PI);
+  const fi = Math.max(0, Math.min(NT - 1.001, (th / Math.PI) * NT - 0.5)), fj = (ph / (2 * Math.PI)) * NP - 0.5;
+  const i0 = Math.floor(fi), ai = fi - i0, j0 = Math.floor(fj), aj = fj - j0;
+  const g = (i, j) => t[Math.min(NT - 1, i) * NP + ((j % NP) + NP) % NP];
+  let E = (1 - ai) * ((1 - aj) * g(i0, j0) + aj * g(i0, j0 + 1)) + ai * ((1 - aj) * g(i0 + 1, j0) + aj * g(i0 + 1, j0 + 1));
+  for (const l of ctx.lights ?? []) {
+    const c = l.type === 'point' ? l.pos : l.center, v = sub(c, P), d2 = dot(v, v), dl = Math.sqrt(d2), dir = [v[0] / dl, v[1] / dl, v[2] / dl];
+    const cosN = dot(N, dir);
+    if (cosN <= 0) continue;
+    if (l.type === 'point') E += (l.radiance * Math.PI * l.radius * l.radius * cosN) / d2;
+    else { const n = norm(cross(l.u, l.v)), area = 4 * Math.hypot(...cross(l.u, l.v)); E += (l.radiance * area * Math.abs(dot(n, dir)) * cosN) / d2; }
+  }
+  return (albedo * E) / Math.PI;
+}
+
 // ---------- 追跡 ----------
 const MAX_DEPTH = 12, SPLIT_DEPTH = 3, SPLIT_WEIGHT = 1e-4;
 
@@ -147,12 +188,99 @@ function shadeOpaque(ctx, f, P, d, lam, depth, key, w) {
   const N = f.normal;
   const sp = f.opaque.specular, df = f.opaque.diffuse;
   if (sp > 0) L += sp * radiance(ctx, P, reflect(d, N), lam, depth + 1, key, w * sp);
-  if (df > 0) {
-    // 余弦重み付きで 1 方向をサンプル(ランバート面)
-    const u1 = ctx.rand(), u2 = ctx.rand(), r = Math.sqrt(u1), ph = 2 * Math.PI * u2;
-    const t1 = norm(Math.abs(N[0]) < 0.9 ? cross(N, [1, 0, 0]) : cross(N, [0, 1, 0])), t2 = cross(N, t1);
-    const wi = norm(addS(addS(addS([0, 0, 0], t1, r * Math.cos(ph)), t2, r * Math.sin(ph)), N, Math.sqrt(1 - u1)));
-    L += df * radiance(ctx, P, wi, lam, Math.max(depth + 1, MAX_DEPTH - 2), key, w * df);
+  if (df > 0) L += diffuseRadiance(ctx, P, N, df);
+  return L;
+}
+
+// ---------- まとめ追跡(16 波長を 1 本の経路で) ----------
+const NB = 16;
+const LAMS = Array.from({ length: NB }, (_, b) => sampleLambda(b, NB, 0.5));
+const RGBW = LAMS.map((l) => spectralToRGB(l, 1 / NB));
+const YW = LAMS.map((l) => spectralToY(l, 1 / NB));
+const idxCache = new WeakMap();
+const AIR_N = new Float64Array(NB).fill(1);
+function indices(entry) {
+  if (!entry) return AIR_N;
+  const m = entry.part.material;
+  let v = idxCache.get(m);
+  if (!v) { v = Float64Array.from(LAMS, (l) => (m.type === 'opaque' ? NaN : materialIndex(m, l / 1000))); idxCache.set(m, v); }
+  return v;
+}
+const YSUM = YW.reduce((a, b) => a + b, 0);
+const lum = (v) => { let s = 0; for (let b = 0; b < NB; b++) s += YW[b] * v[b]; return s; };
+const filled = (x) => { const v = new Float64Array(NB); if (x) v.fill(x); return v; };
+const scaled = (v, k) => { const o = new Float64Array(NB); for (let b = 0; b < NB; b++) o[b] = v[b] * k; return o; };
+
+// 深さごとの作業用バッファ(割り当てなし)。子の結果は受け取った直後に親が足し込むので、同じ深さで使い回せる
+const BUF_L = Array.from({ length: MAX_DEPTH + 2 }, () => new Float64Array(NB));
+const BUF_R = Array.from({ length: MAX_DEPTH + 2 }, () => new Float64Array(NB));
+const BUF_T = Array.from({ length: MAX_DEPTH + 3 }, () => new Float64Array(NB));
+
+/**
+ * 16 波長の放射輝度ベクトル(BUF_L[depth] を返す。呼び出し側はすぐに使うこと)。
+ * 経路の形は ctx.lamG(nm)で決め、反射率・透過率は波長ごとに計算する。thr は画素から見た経路の重み(波長ごと)。
+ */
+function radianceV(ctx, o, d, depth, firstRefl, thr) {
+  const L = BUF_L[depth];
+  L.fill(0);
+  const w = lum(thr) / YSUM;
+  if (depth > MAX_DEPTH || w < 1e-7) return L;
+  const hit = intersect(ctx.scene, o, d, T_MIN);
+  const lh = lightHit(ctx.lights, o, d, hit ? hit.t : Infinity);
+  let Lterm = -1;
+  if (lh.t < (hit ? hit.t : Infinity)) Lterm = lh.L;
+  else if (!hit) Lterm = envRadiance(ctx.env, d);
+  if (Lterm >= 0) {
+    if (firstRefl && ctx.contrib) ctx.contrib[firstRefl] = (ctx.contrib[firstRefl] ?? 0) + lum(thr) * Lterm;
+    L.fill(Lterm);
+    return L;
+  }
+  const f = interfaceAt(ctx.scene, hit, d, ctx.lamG / 1000);
+  const P = hit.point;
+  const child = BUF_T[depth + 1];
+  if (f.opaque) {
+    const key = firstRefl ?? faceKey(hit);
+    const N = f.normal, sp = f.opaque.specular, df = f.opaque.diffuse;
+    const acc = new Float64Array(NB);
+    if (sp > 0) { for (let b = 0; b < NB; b++) child[b] = thr[b] * sp; const Lr = radianceV(ctx, P, reflect(d, N), depth + 1, key, child); for (let b = 0; b < NB; b++) acc[b] += sp * Lr[b]; }
+    if (df > 0) { const Ld = diffuseRadiance(ctx, P, N, df); for (let b = 0; b < NB; b++) acc[b] += Ld; }
+    L.set(acc);
+    return L;
+  }
+  const rd = reflect(d, f.normal);
+  const td = refract(d, f.normal, f.nBefore, f.nAfter);
+  if (!td) { // 全反射: そのまま子の結果を返す
+    const key = firstRefl ?? faceKey(hit);
+    for (let b = 0; b < NB; b++) child[b] = thr[b];
+    const Lr = radianceV(ctx, P, rd, depth + 1, key, child);
+    L.set(Lr);
+    return L;
+  }
+  const internal = hit.hits.length > 1 && f.before && f.after;
+  const nb = indices(f.before), na = indices(f.after);
+  const R = BUF_R[depth];
+  R.fill(0);
+  if (!(ctx.suppressInternal && internal)) {
+    const ci = Math.abs(f.cosI);
+    if (!f.layers.length) for (let b = 0; b < NB; b++) R[b] = bareR(nb[b], na[b], ci);
+    else for (let b = 0; b < NB; b++) R[b] = thinFilm(nb[b], f.layers, na[b], ci, LAMS[b] / 1000).R;
+  }
+  let Rm = 0, Ysum = 0;
+  for (let b = 0; b < NB; b++) { Rm += YW[b] * R[b] * thr[b]; Ysum += YW[b] * thr[b]; }
+  Rm = Ysum > 0 ? Rm / Ysum : 0;
+  let doR = Rm > 0, doT = true, sR = 1, sT = 1;
+  if (doR && !(depth < SPLIT_DEPTH || w * Math.min(Rm, 1 - Rm) > SPLIT_WEIGHT)) {
+    if (ctx.rand() < Rm) { doT = false; sR = Rm; } else { doR = false; sT = 1 - Rm; }
+  }
+  if (doR) {
+    for (let b = 0; b < NB; b++) child[b] = (thr[b] * R[b]) / sR;
+    const Lr = radianceV(ctx, P, rd, depth + 1, firstRefl ?? faceKey(hit), child);
+    for (let b = 0; b < NB; b++) L[b] += (R[b] / sR) * Lr[b];
+  }
+  if (doT) {
+    for (let b = 0; b < NB; b++) child[b] = (thr[b] * (1 - R[b])) / sT;
+    const Lt = radianceV(ctx, P, td, depth + 1, firstRefl, child);
+    for (let b = 0; b < NB; b++) L[b] += ((1 - R[b]) / sT) * Lt[b];
   }
   return L;
 }
@@ -184,14 +312,27 @@ export function renderTile(sceneCache, job) {
     const bin = (job.pass + ((px * 7 + py * 13) % nBins)) % nBins;
     const lam = sampleLambda(bin, nBins, 0.5);
     const pc = {};
-    const ctx = { scene, env: job.env, lights: job.lights, rand, contrib: pc, suppressInternal: !!job.suppressInternal };
-    const L = radiance(ctx, ray.o, ray.d, lam, 0, null, 1);
-    const yb = spectralToY(lam, 1);
-    for (const key in pc) contrib[key] = (contrib[key] ?? 0) + pc[key] * yb;
-    const c = spectralToRGB(lam, L);
     const k = j * job.w + i;
-    rgb[k * 3] = c[0]; rgb[k * 3 + 1] = c[1]; rgb[k * 3 + 2] = c[2];
-    Y[k] = spectralToY(lam, L);
+    if (job.exactSpectral) {
+      // 正確モード: 1 サンプル 1 波長(分散による光路の違いもサンプルごとに厳密)
+      const ctx = { scene, env: job.env, lights: job.lights, rand, contrib: pc, suppressInternal: !!job.suppressInternal };
+      const L = radiance(ctx, ray.o, ray.d, lam, 0, null, 1);
+      const yb = spectralToY(lam, 1);
+      for (const key in pc) contrib[key] = (contrib[key] ?? 0) + pc[key] * yb;
+      const c = spectralToRGB(lam, L);
+      rgb[k * 3] = c[0]; rgb[k * 3 + 1] = c[1]; rgb[k * 3 + 2] = c[2];
+      Y[k] = spectralToY(lam, L);
+    } else {
+      // まとめモード(既定): 経路は 1 本、反射率は 16 波長ぶん。経路の波長はパスごとに巡回(分散は平均として入る)
+      const lamG = job.pass === 0 ? 550 : lam;
+      const ctx = { scene, env: job.env, lights: job.lights, rand, contrib: pc, suppressInternal: !!job.suppressInternal, lamG };
+      const L = radianceV(ctx, ray.o, ray.d, 0, null, BUF_T[0].fill(1));
+      let r = 0, g = 0, bl = 0, yy = 0;
+      for (let b = 0; b < NB; b++) { r += RGBW[b][0] * L[b]; g += RGBW[b][1] * L[b]; bl += RGBW[b][2] * L[b]; yy += YW[b] * L[b]; }
+      for (const key in pc) contrib[key] = (contrib[key] ?? 0) + pc[key];
+      rgb[k * 3] = r; rgb[k * 3 + 1] = g; rgb[k * 3 + 2] = bl;
+      Y[k] = yy;
+    }
   }
   return { rgb, y: Y, contrib };
 }
@@ -205,13 +346,13 @@ export function prepareScene(parts) {
 }
 
 /** 画像全体を n パス描画(Node のテスト・角度一覧用の同期版) */
-export function renderImage(parts, { camera, env, lights, width, height, passes = 16, suppressInternal = false }) {
+export function renderImage(parts, { camera, env, lights, width, height, passes = 16, suppressInternal = false, exactSpectral = false }) {
   const cache = prepareScene(parts);
   const L = [...(lights ?? []), ...presetLights(env, cache)];
   const rgb = new Float32Array(width * height * 3), y = new Float32Array(width * height);
   const contrib = {};
   for (let p = 0; p < passes; p++) {
-    const t = renderTile(cache, { camera, env, lights: L, width, height, pass: p, x0: 0, y0: 0, w: width, h: height, suppressInternal });
+    const t = renderTile(cache, { camera, env, lights: L, width, height, pass: p, x0: 0, y0: 0, w: width, h: height, suppressInternal, exactSpectral });
     for (let i = 0; i < rgb.length; i++) rgb[i] += t.rgb[i] / passes;
     for (let i = 0; i < y.length; i++) y[i] += t.y[i] / passes;
     for (const k in t.contrib) contrib[k] = (contrib[k] ?? 0) + t.contrib[k] / passes;
