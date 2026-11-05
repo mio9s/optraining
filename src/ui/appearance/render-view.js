@@ -36,7 +36,8 @@ export function createPool() {
   return {
     size: workers.length || 1,
     async ensureScene(parts) {
-      const key = JSON.stringify(parts);
+      // メッシュの頂点データ(大きい)は識別子だけで比べる
+      const key = JSON.stringify(parts, (k, v) => (k === 'mesh' && v && v.key ? { key: v.key } : v));
       if (key === sceneKey && sceneInfo) return sceneInfo;
       sceneKey = key;
       if (!workers.length) { localCache = prepareScene(parts); sceneInfo = { center: localCache.center, size: localCache.size }; return sceneInfo; }

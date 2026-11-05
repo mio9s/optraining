@@ -3,6 +3,7 @@
 // material: ガラス {type:'preset'|'model'}、または不透明 {type:'opaque', kind}
 import { surfaceZ } from '../core/system.js';
 import { sphericalSegment, validateProfile, tessellate, containsPoint, bounds, translateProfile } from './profile.js';
+import { decodeMesh, meshBounds, buildMeshAccel, meshContains } from './mesh.js';
 
 export const OPAQUE = {
   black: { label: '黒つや消し', diffuse: 0.03, specular: 0 },
@@ -78,6 +79,44 @@ export function rect(r0, r1, z0, z1) {
   return { start: [r0, z0], segments: [{ type: 'line', to: [r1, z0] }, { type: 'line', to: [r1, z1] }, { type: 'line', to: [r0, z1] }, { type: 'line', to: [r0, z0] }] };
 }
 
+const meshCache = new Map();
+/** メッシュ部品の頂点・三角形(base64 から復元してキャッシュ) */
+export function meshData(p) {
+  const key = p.mesh.key ?? p.id;
+  let m = meshCache.get(key);
+  if (!m) { m = decodeMesh(p.mesh); meshCache.set(key, m); }
+  return m;
+}
+export const isMesh = (p) => p.kind === 'mesh';
+/** 部品の範囲: {lo:[x,y,z], hi:[x,y,z], rMax(光軸からの最大距離), zMin, zMax} */
+export function partBounds(p) {
+  if (isMesh(p)) {
+    const { lo, hi } = meshBounds(meshData(p).V), o = p.offset ?? [0, 0, 0];
+    const L = lo.map((v, k) => v + o[k]), H = hi.map((v, k) => v + o[k]);
+    return { lo: L, hi: H, rMax: Math.max(Math.hypot(L[0], L[1]), Math.hypot(H[0], H[1]), Math.hypot(L[0], H[1]), Math.hypot(H[0], L[1])), zMin: L[2], zMax: H[2] };
+  }
+  const b = bounds(tessellate(placedProfile(p)));
+  return { lo: [-b.rMax, -b.rMax, b.zMin], hi: [b.rMax, b.rMax, b.zMax], rMax: b.rMax, zMin: b.zMin, zMax: b.zMax };
+}
+
+const accCache = new Map();
+/** 交差判定用の構造(頂点データと位置ごとにキャッシュ) */
+export function meshAccel(p) {
+  const o = p.offset ?? [0, 0, 0], key = `${p.mesh.key ?? p.id}|${o.join(',')}|${p.creaseDeg ?? 30}`;
+  let a = accCache.get(key);
+  if (!a) { if (accCache.size > 16) accCache.clear(); a = buildMeshAccel(meshData(p), { offset: o, creaseDeg: p.creaseDeg ?? 30 }); accCache.set(key, a); }
+  return a;
+}
+/** メッシュの面のすぐ内側の点(重なりの検査用、最大 n 点) */
+function innerSamples(acc, depth, n = 240) {
+  const nT = acc.F.length / 3, step = Math.max(1, Math.floor(nT / n)), out = [];
+  for (let t = 0; t < nT; t += step) {
+    const c = [0, 1, 2].map((k) => (acc.P[acc.F[t * 3] * 3 + k] + acc.P[acc.F[t * 3 + 1] * 3 + k] + acc.P[acc.F[t * 3 + 2] * 3 + k]) / 3);
+    out.push([c[0] - acc.FN[t * 3] * depth, c[1] - acc.FN[t * 3 + 1] * depth, c[2] - acc.FN[t * 3 + 2] * depth]);
+  }
+  return out;
+}
+
 /** 部品の z オフセットを反映した断面 */
 export const placedProfile = (p) => (p.zOffset ? translateProfile(p.profile, p.zOffset) : p.profile);
 
@@ -85,6 +124,7 @@ export const placedProfile = (p) => (p.zOffset ? translateProfile(p.profile, p.z
 export function validateScene(parts) {
   const errors = [];
   const ed = parts.map((p) => {
+    if (isMesh(p)) return null; // メッシュは取り込み時に閉じているかを確認済み(重なりの検査は回転体どうしのみ)
     const v = validateProfile(placedProfile(p));
     if (!v.ok) errors.push({ part: p.id, message: `${p.name}: ${v.errors.join('、')}` });
     return v.ok ? v.edges : null;
@@ -101,6 +141,23 @@ export function validateScene(parts) {
     });
     if (hit && a < b) errors.push({ part: parts[a].id, message: `${parts[a].name} と ${parts[b].name} が重なっています` });
   }
+  // STL の部品: 面のすぐ内側の点が他の部品の中にあれば重なり(接触の許容差より深い位置で調べる)
+  const vis = parts.map((p) => p.visible !== false);
+  parts.forEach((p, a) => {
+    if (!isMesh(p) || !vis[a]) return;
+    let acc;
+    try { acc = meshAccel(p); } catch (e) { errors.push({ part: p.id, message: `${p.name}: 形状を読めません(${e.message})` }); return; }
+    const ba = partBounds(p);
+    const pts = innerSamples(acc, Math.max(2 * (p.contactTol ?? 0.002), 1e-3));
+    parts.forEach((q, b) => {
+      if (b === a || !vis[b]) return;
+      const bb = partBounds(q);
+      if ([0, 1, 2].some((k) => ba.hi[k] < bb.lo[k] || bb.hi[k] < ba.lo[k])) return;
+      const inside = isMesh(q) ? (x) => meshContains(meshAccel(q), x) : (x) => (ed[b] ? containsPoint(ed[b], Math.hypot(x[0], x[1]), x[2]) : false);
+      const hit = pts.some((x) => x[0] >= bb.lo[0] && x[0] <= bb.hi[0] && x[1] >= bb.lo[1] && x[1] <= bb.hi[1] && x[2] >= bb.lo[2] && x[2] <= bb.hi[2] && inside(x));
+      if (hit && !(isMesh(q) && b < a)) errors.push({ part: p.id, message: `${p.name} と ${q.name} が重なっています(Δx・Δy・Δz で位置をずらすか、片方を非表示にしてください)` });
+    });
+  });
   return { ok: errors.length === 0, errors };
 }
 

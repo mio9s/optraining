@@ -392,7 +392,16 @@ const appearanceState = (() => {
   try { const v = fromJSON(localStorage.getItem(AP_KEY) ?? 'null'); if (v) return { ...defaultAppearance(), ...v }; } catch { /* */ }
   return defaultAppearance();
 })();
-function saveAppearance() { try { localStorage.setItem(AP_KEY, toJSON(appearanceState)); } catch { /* */ } }
+// 保存はまとめて(ドラッグ中に毎回 JSON 化しない。STL の部品は大きい)
+let apSaveTimer = null, apSaveWarned = false;
+function saveAppearance() {
+  clearTimeout(apSaveTimer);
+  apSaveTimer = setTimeout(() => {
+    try { localStorage.setItem(AP_KEY, toJSON(appearanceState)); } catch {
+      if (!apSaveWarned && appearanceState.parts?.some((p) => p.kind === 'mesh')) { apSaveWarned = true; const w = $('ap-warn'); if (w) w.textContent = 'STL の部品が大きいため、ブラウザに自動保存できません。「保存」(JSON ファイル)で保存してください。'; }
+    }
+  }, 400);
+}
 const appearance = initAppearance({ getSystem: () => state.valid, getState: () => appearanceState, setState: () => saveAppearance() });
 const MODE_TEXT = {
   imaging: ['結像・収差モード', 'レンズデータを入力して、像の写り(PSF)・収差・色収差を解析します。', '① レンズデータ → ② 断面図 → ③ 結像'],

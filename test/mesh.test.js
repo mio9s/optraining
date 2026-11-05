@@ -67,3 +67,23 @@ test('smooth normals on a revolved lens follow the sphere; edges stay sharp', ()
   // 平らな後面の法線は +z のまま(コバとの角で丸まらない)
   assert.ok(hits[1].normal[2] > 0.99999);
 });
+
+test('one STL with two cemented lenses (shared face, non-manifold edges) splits into two closed bodies', async () => {
+  const { lensProfile } = await import('../src/appearance/scene.js');
+  const a = revolveTris(lensProfile(0, 30, 10, 4, -60, 10), 64);
+  const b = revolveTris(lensProfile(4, -60, 10, 6, Infinity, 10), 64);
+  const all = new Float32Array(a.length + b.length); all.set(a); all.set(b, a.length);
+  // 外向き(STL の標準)と内向き(テスト用の回転体は内向き)の両方
+  const out = Float32Array.from(all);
+  for (let i = 0; i < out.length; i += 9) for (let k = 0; k < 3; k++) { const x = out[i + 3 + k]; out[i + 3 + k] = out[i + 6 + k]; out[i + 6 + k] = x; }
+  const r2 = importSTL(toBinarySTL(out));
+  assert.equal(r2.bodies.length, 2);
+  for (const body of r2.bodies) { assert.equal(body.open, 0); assert.equal(body.flipped, false); }
+  const r = importSTL(toBinarySTL(all));
+  assert.equal(r.bodies.length, 2);
+  for (const body of r.bodies) { assert.equal(body.open, 0); assert.equal(body.flipped, true); }
+  assert.deepEqual(r2.warnings, []);
+  const zs = r.bodies.map((x) => [+x.bounds.lo[2].toFixed(3), +x.bounds.hi[2].toFixed(3)]).sort((p, q) => p[0] - q[0]);
+  assert.equal(zs[0][1] > 3 && zs[0][1] < 4.01, true);
+  assert.equal(zs[1][0] > 3, true);
+});

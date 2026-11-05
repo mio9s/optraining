@@ -5,6 +5,7 @@ import { thinFilm, bareR } from './thinfilm.js';
 import { refract, reflect } from '../core/trace.js';
 import { spectralToRGB, spectralToY, sampleLambda } from './color.js';
 import { bounds } from './profile.js';
+import { partBounds } from './scene.js';
 
 // ---------- 乱数 ----------
 export function rng(seed) {
@@ -40,15 +41,15 @@ export function primaryRay(cb, u, v, aspect) {
 
 /** シーンを見やすく収めるカメラの既定値 */
 export function defaultCamera(parts) {
-  let r = 1, z0 = Infinity, z1 = -Infinity;
+  const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
   for (const p of parts) {
-    // 粗い範囲(制御点込み)でよい
-    const pts = [p.profile.start, ...p.profile.segments.map((s) => s.to)];
-    for (const q of pts) { r = Math.max(r, q[0]); z0 = Math.min(z0, q[1] + (p.zOffset ?? 0)); z1 = Math.max(z1, q[1] + (p.zOffset ?? 0)); }
+    if (p.visible === false) continue; // 非表示の部品は視野に入れない
+    let b; try { b = partBounds(p); } catch { continue; }
+    for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], b.lo[k]); hi[k] = Math.max(hi[k], b.hi[k]); }
   }
-  if (!Number.isFinite(z0)) { z0 = 0; z1 = 1; }
-  const size = Math.max(2 * r, z1 - z0);
-  return { target: [0, 0, (z0 + z1) / 2], azimuth: 35, elevation: 20, distance: size * 3.2, fov: 30 };
+  if (!Number.isFinite(lo[0])) return { target: [0, 0, 0], azimuth: 35, elevation: 20, distance: 60, fov: 30 };
+  const size = Math.max(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2], 1);
+  return { target: [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2], azimuth: 35, elevation: 20, distance: size * 3.2, fov: 30 };
 }
 
 // ---------- 環境 ----------
@@ -167,9 +168,9 @@ const MAX_DEPTH = 12, SPLIT_DEPTH = 3, SPLIT_WEIGHT = 1e-4;
  * 1 本の光線の放射輝度(波長 λ nm)。w は画素から見た経路の重み。
  * 光源・環境に届いたとき、最初に反射した界面(firstRefl)へ w·L を寄与として積算する(ctx.contrib)。
  */
-function radiance(ctx, o, d, lam, depth, firstRefl, w) {
+function radiance(ctx, o, d, lam, depth, firstRefl, w, prev = null) {
   if (depth > MAX_DEPTH || w < 1e-7) return 0;
-  const hit = intersect(ctx.scene, o, d, T_MIN);
+  const hit = intersect(ctx.scene, o, d, T_MIN, Infinity, prev);
   const lh = lightHit(ctx.lights, o, d, hit ? hit.t : Infinity);
   const term = (L) => { if (firstRefl && ctx.contrib) ctx.contrib[firstRefl] = (ctx.contrib[firstRefl] ?? 0) + w * L; return L; };
   if (lh.t < (hit ? hit.t : Infinity)) return term(lh.L);
@@ -184,13 +185,13 @@ function radiance(ctx, o, d, lam, depth, firstRefl, w) {
   const R = ctx.suppressInternal && internal && f.cosI > 0 && tf.R < 1 ? 0 : tf.R, T = 1 - R;
   const rd = reflect(d, f.normal);
   const td = T > 1e-12 ? refract(d, f.normal, f.nBefore, f.nAfter) : null;
-  if (!td) return radiance(ctx, P, rd, lam, depth + 1, firstRefl ?? key, w);
+  if (!td) return radiance(ctx, P, rd, lam, depth + 1, firstRefl ?? key, w, hit);
   // 重みの大きい分岐は両方を追い(ノイズなし)、寄与が無視できる深い分岐だけ確率的に選ぶ
   if (depth < SPLIT_DEPTH || w * Math.min(R, T) > SPLIT_WEIGHT) {
-    const lr = R > 0 ? R * radiance(ctx, P, rd, lam, depth + 1, firstRefl ?? key, w * R) : 0;
-    return lr + T * radiance(ctx, P, td, lam, depth + 1, firstRefl, w * T);
+    const lr = R > 0 ? R * radiance(ctx, P, rd, lam, depth + 1, firstRefl ?? key, w * R, hit) : 0;
+    return lr + T * radiance(ctx, P, td, lam, depth + 1, firstRefl, w * T, hit);
   }
-  return ctx.rand() < R ? radiance(ctx, P, rd, lam, depth + 1, firstRefl ?? key, w) : radiance(ctx, P, td, lam, depth + 1, firstRefl, w);
+  return ctx.rand() < R ? radiance(ctx, P, rd, lam, depth + 1, firstRefl ?? key, w, hit) : radiance(ctx, P, td, lam, depth + 1, firstRefl, w, hit);
 }
 
 function shadeOpaque(ctx, f, P, d, lam, depth, key, w) {
@@ -230,12 +231,12 @@ const BUF_T = Array.from({ length: MAX_DEPTH + 3 }, () => new Float64Array(NB));
  * 16 波長の放射輝度ベクトル(BUF_L[depth] を返す。呼び出し側はすぐに使うこと)。
  * 経路の形は ctx.lamG(nm)で決め、反射率・透過率は波長ごとに計算する。thr は画素から見た経路の重み(波長ごと)。
  */
-function radianceV(ctx, o, d, depth, firstRefl, thr) {
+function radianceV(ctx, o, d, depth, firstRefl, thr, prev = null) {
   const L = BUF_L[depth];
   L.fill(0);
   const w = lum(thr) / YSUM;
   if (depth > MAX_DEPTH || w < 1e-7) return L;
-  const hit = intersect(ctx.scene, o, d, T_MIN);
+  const hit = intersect(ctx.scene, o, d, T_MIN, Infinity, prev);
   const lh = lightHit(ctx.lights, o, d, hit ? hit.t : Infinity);
   let Lterm = -1;
   if (lh.t < (hit ? hit.t : Infinity)) Lterm = lh.L;
@@ -252,7 +253,7 @@ function radianceV(ctx, o, d, depth, firstRefl, thr) {
     const key = firstRefl ?? faceKey(hit);
     const N = f.normal, sp = f.opaque.specular, df = f.opaque.diffuse;
     const acc = new Float64Array(NB);
-    if (sp > 0) { for (let b = 0; b < NB; b++) child[b] = thr[b] * sp; const Lr = radianceV(ctx, P, reflect(d, N), depth + 1, key, child); for (let b = 0; b < NB; b++) acc[b] += sp * Lr[b]; }
+    if (sp > 0) { for (let b = 0; b < NB; b++) child[b] = thr[b] * sp; const Lr = radianceV(ctx, P, reflect(d, N), depth + 1, key, child, hit); for (let b = 0; b < NB; b++) acc[b] += sp * Lr[b]; }
     if (df > 0) { const Ld = diffuseRadiance(ctx, P, N, df); for (let b = 0; b < NB; b++) acc[b] += Ld; }
     L.set(acc);
     return L;
@@ -262,7 +263,7 @@ function radianceV(ctx, o, d, depth, firstRefl, thr) {
   if (!td) { // 全反射: そのまま子の結果を返す
     const key = firstRefl ?? faceKey(hit);
     for (let b = 0; b < NB; b++) child[b] = thr[b];
-    const Lr = radianceV(ctx, P, rd, depth + 1, key, child);
+    const Lr = radianceV(ctx, P, rd, depth + 1, key, child, hit);
     L.set(Lr);
     return L;
   }
@@ -284,12 +285,12 @@ function radianceV(ctx, o, d, depth, firstRefl, thr) {
   }
   if (doR) {
     for (let b = 0; b < NB; b++) child[b] = (thr[b] * R[b]) / sR;
-    const Lr = radianceV(ctx, P, rd, depth + 1, firstRefl ?? faceKey(hit), child);
+    const Lr = radianceV(ctx, P, rd, depth + 1, firstRefl ?? faceKey(hit), child, hit);
     for (let b = 0; b < NB; b++) L[b] += (R[b] / sR) * Lr[b];
   }
   if (doT) {
     for (let b = 0; b < NB; b++) child[b] = (thr[b] * (1 - R[b])) / sT;
-    const Lt = radianceV(ctx, P, td, depth + 1, firstRefl, child);
+    const Lt = radianceV(ctx, P, td, depth + 1, firstRefl, child, hit);
     for (let b = 0; b < NB; b++) L[b] += ((1 - R[b]) / sT) * Lt[b];
   }
   return L;
@@ -365,7 +366,10 @@ export function gridPanel(env, cb, camera, cache) {
 export function prepareScene(parts) {
   const scene = buildTraceScene(parts);
   let r = 1, z0 = Infinity, z1 = -Infinity;
-  for (const e of scene.list) { const b = bounds(e.all); r = Math.max(r, b.rMax); z0 = Math.min(z0, b.zMin); z1 = Math.max(z1, b.zMax); }
+  for (const e of scene.list) {
+    if (e.kind === 'mesh') { const b = e.box3; r = Math.max(r, Math.abs(b[0]), Math.abs(b[1]), Math.abs(b[3]), Math.abs(b[4])); z0 = Math.min(z0, b[2]); z1 = Math.max(z1, b[5]); continue; }
+    const b = bounds(e.all); r = Math.max(r, b.rMax); z0 = Math.min(z0, b.zMin); z1 = Math.max(z1, b.zMax);
+  }
   return { scene, center: [0, 0, Number.isFinite(z0) ? (z0 + z1) / 2 : 0], size: Math.max(2 * r, z1 - z0) };
 }
 
@@ -387,7 +391,10 @@ export function renderImage(parts, { camera, env, lights, width, height, passes 
 /** 部品の面(セグメント)一覧 */
 export function listFaces(parts) {
   const out = [];
-  for (const p of parts) p.profile.segments.forEach((s, i) => out.push({ partId: p.id, seg: i, name: `${p.name} 面 ${i + 1}` }));
+  for (const p of parts) {
+    if (p.kind === 'mesh') { out.push({ partId: p.id, seg: 0, name: `${p.name} 表面` }); continue; }
+    p.profile.segments.forEach((s, i) => out.push({ partId: p.id, seg: i, name: `${p.name} 面 ${i + 1}` }));
+  }
   return out;
 }
 

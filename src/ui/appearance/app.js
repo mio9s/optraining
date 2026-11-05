@@ -1,6 +1,7 @@
 // 外観画面の制御: 部品リスト、取り込み、照明、描画ビュー、数値(反射率・断面・判定・寄与)、角度一覧
 import uPlot from 'uplot';
-import { partsFromSystem, validateScene, OPAQUE, newId, placedProfile } from '../../appearance/scene.js';
+import { partsFromSystem, validateScene, OPAQUE, newId, placedProfile, partBounds, isMesh, meshData } from '../../appearance/scene.js';
+import { openStlImport, sliceXZ } from './stl-import.js';
 import { importProfiles } from '../../appearance/import.js';
 import { tessellate, bounds, segmentEvaluator } from '../../appearance/profile.js';
 import { COATINGS } from '../../appearance/thinfilm.js';
@@ -28,6 +29,7 @@ export const defaultAppearance = () => ({ parts: null, env: 'room', lights: [], 
 
 /** 面の名前(前面/後面/コバ/段) */
 export function faceLabel(part, seg) {
+  if (isMesh(part)) return seg === 0 ? '表面' : null;
   const edges = tessellate(placedProfile(part)).filter((e) => e.seg === seg && !e.onAxis);
   if (!edges.length) return null;
   const e = edges[Math.floor(edges.length / 2)];
@@ -51,6 +53,12 @@ export function initAppearance({ getSystem, getState, setState }) {
     st.parts = r.parts;
     $('ap-warn').textContent = r.warnings.join(' / ');
     st.camera = defaultCamera(st.parts);
+  }
+  /** 既存部品の最も後ろの z(なければ −∞) */
+  function zEndOf(parts) {
+    let zEnd = -Infinity;
+    for (const p of parts) { try { zEnd = Math.max(zEnd, partBounds(p).zMax); } catch { /* */ } }
+    return zEnd;
   }
   function materialSelect(p) {
     const sel = h('select', { 'aria-label': `${p.name} の材質` });
@@ -79,18 +87,30 @@ export function initAppearance({ getSystem, getState, setState }) {
       vis.addEventListener('change', () => { p.visible = vis.checked; changed(true); });
       const name = h('input', { type: 'text', value: p.name, class: 'ap-name', 'aria-label': '部品名' });
       name.addEventListener('change', () => { p.name = name.value; changed(false); });
-      const dz = h('input', { type: 'text', value: String(p.zOffset ?? 0), class: 'num', title: 'z 方向の移動量 [mm]', 'aria-label': `${p.name} の z オフセット` });
-      dz.addEventListener('change', () => { const x = parseNumber(dz.value); if (Number.isFinite(x)) { p.zOffset = x; changed(true); } else dz.classList.add('invalid'); });
+      const mesh = isMesh(p);
+      const offInput = (axis, k) => {
+        const cur = mesh ? (p.offset ?? [0, 0, 0])[k] : p.zOffset ?? 0;
+        const inp = h('input', { type: 'text', value: String(+cur.toFixed(6)), class: 'num', title: `${axis} 方向の移動量 [mm]`, 'aria-label': `${p.name} の ${axis} 方向の移動量` });
+        inp.addEventListener('change', () => {
+          const x = parseNumber(inp.value);
+          if (!Number.isFinite(x)) { inp.classList.add('invalid'); return; }
+          if (mesh) { p.offset = [...(p.offset ?? [0, 0, 0])]; p.offset[k] = x; } else p.zOffset = x;
+          changed(true);
+        });
+        return h('label', { class: 'field' }, h('span', {}, `Δ${axis}`), inp, h('small', {}, 'mm'));
+      };
+      const moves = mesh ? [offInput('x', 0), offInput('y', 1), offInput('z', 2)] : [offInput('z', 2)];
       const col = pal.get(materialKey(p.material));
       const row = h('div', { class: `ap-part${bad.has(p.id) ? ' invalid' : ''}`, style: col ? `border-left: 5px solid ${col.solid}` : p.material.type === 'opaque' ? 'border-left: 5px solid #555' : null },
-        h('div', { class: 'ap-row' }, vis, name, h('span', { class: 'muted' }, p.source === 'auto' ? '自動' : p.source === 'import' ? '取込' : '描画')),
+        h('div', { class: 'ap-row' }, vis, name, h('span', { class: 'muted', title: mesh ? `三角形 ${(p.mesh.triangles ?? 0).toLocaleString()} 枚${p.mesh.open ? `、閉じていない辺 ${p.mesh.open} 本` : ''}` : null }, p.source === 'auto' ? '自動' : p.source === 'stl' ? `STL(${(p.mesh.triangles ?? 0).toLocaleString()} 面)` : p.source === 'import' ? '取込' : '描画')),
         h('div', { class: 'ap-row' }, materialSelect(p),
-          p.material.type === 'model' ? modelInputs(p) : null,
-          h('label', { class: 'field' }, h('span', {}, 'Δz'), dz, h('small', {}, 'mm'))),
+          p.material.type === 'model' ? modelInputs(p) : null),
+        h('div', { class: 'ap-row' }, ...moves),
+        mesh && p.mesh.open ? h('div', { class: 'warn' }, `閉じていない立体です(開いた辺 ${p.mesh.open} 本)。内外の判定が誤ることがあります`) : null,
         h('div', { class: 'ap-row' },
-          h('button', { type: 'button', onclick: () => openProfileEditor($('pe-dialog'), p, (np) => { Object.assign(p, np, { source: p.source === 'auto' ? 'draw' : p.source }); changed(true); }) }, '断面を編集…'),
+          mesh ? null : h('button', { type: 'button', onclick: () => openProfileEditor($('pe-dialog'), p, (np) => { Object.assign(p, np, { source: p.source === 'auto' ? 'draw' : p.source }); changed(true); }) }, '断面を編集…'),
           h('button', { type: 'button', onclick: () => openCoatings(p) }, `コート…${Object.keys(p.coatings ?? {}).length ? `(${Object.keys(p.coatings).length})` : ''}`),
-          h('button', { type: 'button', title: '複製', onclick: () => { st.parts.splice(i + 1, 0, { ...JSON.parse(JSON.stringify(p)), id: newId(), name: `${p.name} のコピー`, source: 'draw' }); changed(true); } }, '複製'),
+          h('button', { type: 'button', title: '複製', onclick: () => { st.parts.splice(i + 1, 0, { ...JSON.parse(JSON.stringify(p)), id: newId(), name: `${p.name} のコピー`, source: mesh ? 'stl' : 'draw' }); changed(true); } }, '複製'),
           h('button', { type: 'button', title: '削除', onclick: () => { st.parts.splice(i, 1); changed(true); } }, '✕')),
       );
       box.append(row);
@@ -109,7 +129,7 @@ export function initAppearance({ getSystem, getState, setState }) {
   function openCoatings(p) {
     const dlg = $('ap-dialog');
     dlg.replaceChildren();
-    const rows = p.profile.segments.map((_, seg) => {
+    const rows = (isMesh(p) ? [0] : p.profile.segments.map((_, i) => i)).map((seg) => {
       const label = faceLabel(p, seg);
       if (!label) return null;
       const sel = h('select', {}, ...Object.entries(COATINGS).map(([k, c]) => h('option', { value: k }, c.label)), h('option', { value: 'custom' }, 'カスタム(層を入力)'));
@@ -121,7 +141,7 @@ export function initAppearance({ getSystem, getState, setState }) {
       return { seg, label, sel, custom };
     }).filter(Boolean);
     dlg.append(h('h2', {}, `${p.name} のコート`), h('p', { class: 'note' }, '層は「部品の外側(空気側)→ 部品(基板)」の順に並べます。接着剤・オイルの薄い層もここで表せます。'),
-      h('table', { class: 'kv' }, h('tbody', {}, ...rows.map((r) => h('tr', {}, h('td', {}, `面 ${r.seg + 1}(${r.label})`), h('td', {}, r.sel, r.custom))))),
+      h('table', { class: 'kv' }, h('tbody', {}, ...rows.map((r) => h('tr', {}, h('td', {}, isMesh(p) ? '表面全体(STL)' : `面 ${r.seg + 1}(${r.label})`), h('td', {}, r.sel, r.custom))))),
       h('div', { class: 'row' },
         h('button', { type: 'button', class: 'primary', onclick: () => {
           const c = {};
@@ -146,11 +166,26 @@ export function initAppearance({ getSystem, getState, setState }) {
     const vis = st.parts.filter((p) => p.visible !== false);
     if (!vis.length) return;
     let rMax = 1, z0 = Infinity, z1 = -Infinity;
-    const ed = vis.map((p) => { try { const e = tessellate(placedProfile(p)); const b = bounds(e); rMax = Math.max(rMax, b.rMax); z0 = Math.min(z0, b.zMin); z1 = Math.max(z1, b.zMax); return e; } catch { return []; } });
+    // 回転体は断面、STL は y = 0 の平面での切り口(z–x)を描く
+    const ed = vis.map((p) => {
+      try {
+        const b = partBounds(p);
+        rMax = Math.max(rMax, isMesh(p) ? Math.max(Math.abs(b.lo[0]), Math.abs(b.hi[0])) : b.rMax); z0 = Math.min(z0, b.zMin); z1 = Math.max(z1, b.zMax);
+        if (isMesh(p)) { const m = meshData(p); return { cut: sliceXZ(m.V, m.F, 0, p.offset ?? [0, 0, 0]) }; }
+        return tessellate(placedProfile(p));
+      } catch { return []; }
+    });
     const s = Math.min((W - 20) / Math.max(z1 - z0, 1e-3), (H - 20) / (2 * rMax));
     const X = (z) => 10 + (z - z0) * s + ((W - 20) - (z1 - z0) * s) / 2, Y = (r) => H / 2 - r * s;
     const pal = materialPalette(st.parts.map((p) => p.material));
     vis.forEach((p, i) => {
+      if (ed[i].cut) {
+        ctx.strokeStyle = p.material.type === 'opaque' ? 'rgba(60,60,60,0.9)' : pal.get(materialKey(p.material))?.solid ?? '#2b6cb0';
+        ctx.lineWidth = 1.6; ctx.beginPath();
+        for (const [a, b] of ed[i].cut) { ctx.moveTo(X(a[0]), Y(a[1])); ctx.lineTo(X(b[0]), Y(b[1])); }
+        ctx.stroke();
+        return;
+      }
       for (const m of [1, -1]) {
         ctx.beginPath();
         ed[i].forEach((e, k) => { if (!k) ctx.moveTo(X(e.a[1]), Y(m * e.a[0])); ctx.lineTo(X(e.b[1]), Y(m * e.b[0])); });
@@ -167,6 +202,17 @@ export function initAppearance({ getSystem, getState, setState }) {
     const f = $('ap-file').files[0]; $('ap-file').value = '';
     if (!f) return;
     const ext = f.name.toLowerCase().split('.').pop();
+    if (ext === 'stl') {
+      const buf = await f.arrayBuffer();
+      openStlImport($('ap-dialog'), f.name, buf, {
+        zEnd: zEndOf(st.parts), newId,
+        onAdd: (bodies, o) => {
+          for (const b of bodies) st.parts.push({ id: newId(), name: b.name, kind: 'mesh', mesh: b.mesh, offset: b.offset, creaseDeg: o.creaseDeg, contactTol: o.contactTol, material: { type: 'preset', name: 'N-BK7' }, coatings: {}, source: 'stl', visible: true });
+          changed(true, true);
+        },
+      });
+      return;
+    }
     const format = ext === 'svg' ? 'svg' : ext === 'dxf' ? 'dxf' : 'csv';
     const text = await f.text();
     openImport(f.name, text, format);
@@ -210,8 +256,7 @@ export function initAppearance({ getSystem, getState, setState }) {
         h('button', { type: 'button', class: 'primary', onclick: () => {
           if (!result?.profiles.length) return;
           // 取り込んだ部品は既存部品の後ろ(z)に並べて置く
-          let zEnd = -Infinity;
-          for (const p of st.parts) { try { zEnd = Math.max(zEnd, bounds(tessellate(placedProfile(p))).zMax); } catch { /* */ } }
+          const zEnd = zEndOf(st.parts);
           result.profiles.forEach((profile, k) => st.parts.push({ id: newId(), name: `${fileName.replace(/\.[^.]+$/, '')}${result.profiles.length > 1 ? `-${k + 1}` : ''}`, profile, material: { type: 'preset', name: 'N-BK7' }, coatings: {}, zOffset: Number.isFinite(zEnd) ? zEnd + 1 : 0, source: 'import', visible: true }));
           dlg.close(); changed(true, true);
         } }, '部品として追加'),
@@ -263,7 +308,7 @@ export function initAppearance({ getSystem, getState, setState }) {
   }
   function worldLights() {
     const info = { center: st.camera?.target ?? [0, 0, 0] };
-    const size = (() => { let r = 1; for (const p of st.parts) { try { r = Math.max(r, bounds(tessellate(placedProfile(p))).rMax * 2); } catch { /* */ } } return r; })();
+    const size = (() => { let r = 1; for (const p of st.parts) { try { r = Math.max(r, partBounds(p).rMax * 2); } catch { /* */ } } return r; })();
     return st.lights.filter((l) => l.on !== false).map((l) => {
       const az = (l.az * Math.PI) / 180, el = (l.el * Math.PI) / 180, d = l.dist * size;
       const dir = [Math.cos(el) * Math.sin(az), Math.sin(el), -Math.cos(el) * Math.cos(az)];
@@ -339,6 +384,7 @@ export function initAppearance({ getSystem, getState, setState }) {
     const scene = buildTraceScene(st.parts);
     st.parts.forEach((p) => {
       if (p.visible === false || p.material.type === 'opaque') return;
+      if (isMesh(p)) { out.push({ part: p, seg: 0, label: `${p.name} 表面(STL、空気との界面として表示)`, outside: { type: 'air' } }); return; }
       const edges = tessellate(placedProfile(p));
       p.profile.segments.forEach((_, seg) => {
         const label = faceLabel(p, seg);
@@ -498,8 +544,7 @@ export function initAppearance({ getSystem, getState, setState }) {
       const p = { id: newId(), name: '新しい部品', profile: null, material: { type: 'preset', name: 'N-BK7' }, coatings: {}, zOffset: 0, source: 'draw', visible: true };
       openProfileEditor($('pe-dialog'), p, (np) => {
         // 既存の部品の後ろ(z)に置く
-        let zEnd = -Infinity;
-        for (const q of st.parts) { try { zEnd = Math.max(zEnd, bounds(tessellate(placedProfile(q))).zMax); } catch { /* */ } }
+        const zEnd = zEndOf(st.parts);
         const zMin = bounds(tessellate(np.profile)).zMin;
         np.zOffset = Number.isFinite(zEnd) ? zEnd + 1 - zMin : 0;
         st.parts.push(np); changed(true, true);

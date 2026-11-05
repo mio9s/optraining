@@ -100,7 +100,7 @@
 
 <main class="layout ap-layout" id="view-appearance" hidden>
   <section class="panel" id="ap-left">
-    <h2>① 部品 <small>(回転体。断面を光軸まわりに回転させた立体)</small></h2>
+    <h2>① 部品 <small>(断面を光軸まわりに回転させた立体、または STL の立体そのもの)</small></h2>
     <div class="row">
       <button type="button" id="ap-regen" title="結像タブのレンズデータから、コバ付きの部品を作り直します">レンズデータから作り直す</button>
       <label class="check" title="空気中のアイリスを黒い板として置く"><input type="checkbox" id="ap-iris"> アイリス板</label>
@@ -108,14 +108,14 @@
     </div>
     <div class="row">
       <button type="button" id="ap-draw">断面を描いて追加…</button>
-      <label class="file" title="SVG・DXF・CSV(r, z の点列)から断面を取り込みます">取り込み(SVG / DXF / CSV)…<input type="file" id="ap-file" accept=".svg,.dxf,.csv,.txt,image/svg+xml"></label>
+      <label class="file" title="SVG・DXF・CSV(r, z の点列)は断面を回転させて部品にします。STL は立体をそのまま(回転させずに)部品にします">取り込み(SVG / DXF / CSV / STL)…<input type="file" id="ap-file" accept=".svg,.dxf,.csv,.txt,.stl,image/svg+xml,model/stl"></label>
     </div>
     <p class="warn" id="ap-warn"></p>
     <div id="ap-parts"></div>
     <p class="errors" id="ap-errors"></p>
     <h3 class="sub">断面図(全部品)</h3>
     <canvas id="ap-section" aria-label="部品の断面図"></canvas>
-    <p class="hint">青 = ガラス、橙 = nd・νd 指定の媒質(オイル・樹脂など)、灰 = 不透明。上半分を回転させて立体にします。</p>
+    <p class="hint">色 = 材質(部品一覧の左端の色と同じ)、灰 = 不透明。回転体は上半分を光軸まわりに回転させて立体にします。STL の部品は y = 0 の平面での切り口を線で表示します。</p>
   </section>
 
   <section class="panel" id="ap-center">

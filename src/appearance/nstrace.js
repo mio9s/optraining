@@ -1,6 +1,7 @@
 // 非逐次光線追跡: 回転体の部品(断面の折れ線を回転した円錐台の集合)と光線の交点、界面の媒質判定
 import { tessellate, containsPoint } from './profile.js';
-import { placedProfile, OPAQUE } from './scene.js';
+import { placedProfile, OPAQUE, isMesh, meshData, meshAccel } from './scene.js';
+import { buildMeshAccel, meshHits, meshContains } from './mesh.js';
 import { refractiveIndex } from '../core/glass.js';
 import { COATINGS } from './thinfilm.js';
 
@@ -12,8 +13,51 @@ const MERGE = 1e-6; // 同じ位置とみなす交点距離の差 [mm]
  * 光軸上に中心がある円弧(球面)と直線(平面・円筒・円錐)は、分割せず 1 つの図形として厳密に交差させる(高速・高精度)。
  * それ以外(ベジェ・スプライン・非球面・軸外中心の円弧)は細かい円錐台に分割して BVH で探す。
  */
+const MESH_SEG = { seg: 0 }; // メッシュは全体を 1 つの面として扱う
+/**
+ * メッシュの頂点(ワールド座標)。接触許容差以内にある別メッシュの頂点へ寄せ、接する面を厳密に一致させる
+ * (STL は部品ごとに書き出されるため、接合面の頂点が丸め誤差でずれていることが多い)
+ */
+function snappedMeshes(meshParts, tol) {
+  const grid = new Map(), cell = Math.max(tol, 1e-9);
+  const key = (x, y, z) => `${Math.floor(x / cell)},${Math.floor(y / cell)},${Math.floor(z / cell)}`;
+  const out = new Map();
+  for (const p of meshParts) {
+    const { V, F } = meshData(p), o = p.offset ?? [0, 0, 0];
+    const W = new Float64Array(V.length);
+    const mine = [];
+    for (let i = 0; i < V.length; i += 3) {
+      let x = V[i] + o[0], y = V[i + 1] + o[1], z = V[i + 2] + o[2];
+      const cx = Math.floor(x / cell), cy = Math.floor(y / cell), cz = Math.floor(z / cell);
+      let best = null, bd = tol;
+      for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) for (let c = -1; c <= 1; c++) {
+        for (const q of grid.get(`${cx + a},${cy + b},${cz + c}`) ?? []) {
+          const dd = Math.hypot(q[0] - x, q[1] - y, q[2] - z);
+          if (dd <= bd) { bd = dd; best = q; }
+        }
+      }
+      if (best) { x = best[0]; y = best[1]; z = best[2]; }
+      W[i] = x; W[i + 1] = y; W[i + 2] = z;
+      mine.push([x, y, z]);
+    }
+    for (const q of mine) { const k = key(...q); if (!grid.has(k)) grid.set(k, []); grid.get(k).push(q); }
+    out.set(p, { V: W, F });
+  }
+  return out;
+}
+
 export function buildTraceScene(parts) {
-  const list = parts.filter((p) => p.visible !== false).map((p, pi) => {
+  let mergeTol = MERGE;
+  const vis = parts.filter((p) => p.visible !== false);
+  const meshParts = vis.filter(isMesh);
+  const tol = meshParts.reduce((m, p) => Math.max(m, p.contactTol ?? 0.002), 0);
+  const snapped = meshParts.length > 1 ? snappedMeshes(meshParts, tol) : null;
+  const list = vis.map((p, pi) => {
+    if (isMesh(p)) {
+      const acc = snapped ? buildMeshAccel(snapped.get(p), { creaseDeg: p.creaseDeg ?? 30 }) : meshAccel(p);
+      mergeTol = Math.max(mergeTol, p.contactTol ?? 0.002);
+      return { part: p, index: pi, kind: 'mesh', acc, box3: acc.box, edges: [], nodes: [], prims: [], all: [] };
+    }
     const prof = placedProfile(p);
     const all = tessellate(prof);
     const prims = [];
@@ -42,7 +86,19 @@ export function buildTraceScene(parts) {
     for (const e of all) { const b = edgeBox(e); box = box ? mergeBox(box, b) : b; }
     return { part: p, index: pi, all, edges, nodes, prims, box };
   });
-  return { list, mediumAt: (x, y, z) => mediumAt(list, x, y, z) };
+  return { list, mergeTol, mediumAt: (x, y, z) => mediumAt(list, x, y, z) };
+}
+
+function aabbHit(b, o, d, tmin, tmax) {
+  for (let c = 0; c < 3; c++) {
+    const inv = 1 / d[c];
+    let t0 = (b[c] - 1e-9 - o[c]) * inv, t1 = (b[c + 3] + 1e-9 - o[c]) * inv;
+    if (t0 > t1) { const x = t0; t0 = t1; t1 = x; }
+    if (t0 > tmin) tmin = t0;
+    if (t1 < tmax) tmax = t1;
+    if (tmin > tmax) return false;
+  }
+  return true;
 }
 
 /** 光軸中心の球面との交点 */
@@ -146,12 +202,26 @@ function edgeHits(e, o, d, tmin, out) {
   }
 }
 
-/** 最も近い交点(同じ位置の共有面はまとめる)。返り値 null または {t, point, hits:[{entry, edge, s, normal}]} */
-export function intersect(scene, o, d, tmin = T_MIN, tmax = Infinity) {
+/**
+ * 最も近い交点(同じ位置の共有面はまとめる)。返り値 null または {t, point, hits:[{entry, edge, s, normal}], skip}
+ * prev: 直前の交点。メッシュの接触面を許容差でまとめたとき、まとめた部品へのごく近い再交差(許容差内のずれ)を無視する
+ */
+export function intersect(scene, o, d, tmin = T_MIN, tmax = Infinity, prev = null) {
   let best = tmax;
   const found = [];
   const tmp = [];
+  const MG = scene.mergeTol ?? MERGE;
+  const sk = prev?.skip;
   for (const entry of scene.list) {
+    if (entry.kind === 'mesh') {
+      if (!aabbHit(entry.box3, o, d, tmin, best + MG)) continue;
+      tmp.length = 0;
+      // 直前の界面でまとめたメッシュは、許容差内の再交差を飛ばす(探し始めを遅らせる)
+      const t0 = sk && sk.entries.includes(entry) ? Math.max(tmin, sk.dist) : tmin;
+      meshHits(entry.acc, o, d, t0, best + MG, tmp, MG);
+      for (const h of tmp) { h.entry = entry; h.edge = MESH_SEG; found.push(h); if (h.t < best) best = h.t; }
+      continue;
+    }
     const { nodes, edges, prims } = entry;
     if (!entry.box || !boxHit(entry.box, o, d, tmin, best + MERGE)) continue;
     for (const pr of prims) {
@@ -186,13 +256,17 @@ export function intersect(scene, o, d, tmin = T_MIN, tmax = Infinity) {
     }
   }
   if (!found.length || best === tmax) return null;
-  const hits = found.filter((h) => h.t <= best + MERGE);
+  const hits = found.filter((h) => h.t <= best + MG);
   // 同じ部品の隣接辺の重複(頂点上)は 1 つに
+  hits.sort((a, b) => a.t - b.t);
   const uniq = [];
   for (const h of hits) if (!uniq.some((u) => u.entry === h.entry)) uniq.push(h);
   const point = [o[0] + best * d[0], o[1] + best * d[1], o[2] + best * d[2]];
-  const mapped = uniq.map((h) => ({ entry: h.entry, edge: h.edge, s: h.s, normal: normal3(h) }));
-  return { t: best, point, hits: mapped, primary: mapped[0] };
+  const mapped = uniq.map((h) => ({ entry: h.entry, edge: h.edge, s: h.s, normal: normal3(h), gnormal: h.gnormal }));
+  // 許容差でまとめた(t がずれている)メッシュがあれば、次の光線ではそれらの近い交点を飛ばす
+  const spread = uniq.length > 1 ? uniq[uniq.length - 1].t - best : 0;
+  const skip = spread > MERGE && uniq.some((h) => h.entry.kind === 'mesh') ? { entries: uniq.map((h) => h.entry), dist: 4 * MG } : null;
+  return { t: best, point, hits: mapped, primary: mapped[0], skip };
 }
 
 /** 外向き法線(元の曲線の法線を補間) */
@@ -207,7 +281,10 @@ function normal3(h) {
 
 function mediumAt(list, x, y, z) {
   const r = Math.hypot(x, y);
-  for (const e of list) if (containsPoint(e.all, r, z)) return e;
+  for (const e of list) {
+    if (e.kind === 'mesh') { if (meshContains(e.acc, [x, y, z])) return e; continue; }
+    if (containsPoint(e.all, r, z)) return e;
+  }
   return null; // 周囲(空気)
 }
 
@@ -230,12 +307,14 @@ function coatingLayers(c) {
 export function interfaceAt(scene, hit, d, lambdaUm) {
   const h = hit.primary;
   const N = h.normal;
+  const Ng = h.gnormal ?? N; // 内外の判定は面の法線(メッシュの滑らかな法線は境界付近で傾くため)
   // 部品は重ならないので、面の内側 = 当たった部品、外側 = 同じ位置で当たった共有面の相手(なければ空気)
   const other = hit.hits.find((x) => x.entry !== h.entry);
   const inside = h.entry, outside = other ? other.entry : null;
-  const entering = d[0] * N[0] + d[1] * N[1] + d[2] * N[2] < 0;
+  const entering = d[0] * Ng[0] + d[1] * Ng[1] + d[2] * Ng[2] < 0;
   const before = entering ? outside : inside, after = entering ? inside : outside;
-  const toward = entering ? N : [-N[0], -N[1], -N[2]]; // 入射側を向く法線
+  let toward = entering ? N : [-N[0], -N[1], -N[2]]; // 入射側を向く法線(屈折・反射には滑らかな法線)
+  if (d[0] * toward[0] + d[1] * toward[1] + d[2] * toward[2] >= 0) toward = entering ? Ng : [-Ng[0], -Ng[1], -Ng[2]];
   const cosI = -(d[0] * toward[0] + d[1] * toward[1] + d[2] * toward[2]);
   // コート: まとめた面のうち、割り当てのあるもの。層は「部品の外側 → 部品(基板)」の順で定義
   let layers = [];
