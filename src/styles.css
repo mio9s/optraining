@@ -231,3 +231,4 @@ table.lde tr.has-mat td.mat { background: var(--mat-bg); }
 table.lde tr.has-mat td.mat select { border-color: var(--mat); }
 .sw.mat { border: 1px solid; }
 .mat-legend { font-weight: 500; }
+.metric.big b { font-size: 20px; }

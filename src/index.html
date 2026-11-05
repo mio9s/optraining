@@ -26,7 +26,8 @@
     <h2 id="h-lde">① レンズデータ <small>(光は左 → 右へ進みます)</small></h2>
     <div class="row lde-tools">
       <label class="field inline">サンプル系 <select id="sample"></select></label>
-      <button type="button" id="btn-focus" title="スクリーンを近軸像面(520 nm)へ移動します">スクリーンを像面へ合わせる</button>
+      <button type="button" id="btn-best" class="primary" title="結像性が最もよい位置(視感度で重み付けした多色のスポットが最小)へスクリーンを移し、結像画像を計算します">最良像面へ合わせて結像</button>
+      <button type="button" id="btn-focus" class="secondary" title="スクリーンを近軸像面(520 nm)へ移動します">近軸像面へ(520 nm)</button>
     </div>
     <div id="editor"></div>
     <p class="hint">曲率半径: 曲率中心が右側なら正・左側なら負、平面は <code>inf</code>。厚み: 次の面までの距離。材質: その面の右側の媒質。</p>
@@ -82,12 +83,14 @@
 
   <section class="panel" id="right">
     <div class="tabs" role="tablist">
-      <button type="button" role="tab" data-tab="chroma" aria-selected="true">色収差</button>
+      <button type="button" role="tab" data-tab="focus" aria-selected="true">焦点・屈折力</button>
+      <button type="button" role="tab" data-tab="chroma" aria-selected="false">色収差</button>
       <button type="button" role="tab" data-tab="zern">ゼルニケ</button>
       <button type="button" role="tab" data-tab="scatter">散乱の公式</button>
       <button type="button" role="tab" data-tab="settings">設定</button>
     </div>
-    <div class="tab" id="tab-chroma" role="tabpanel"></div>
+    <div class="tab" id="tab-focus" role="tabpanel"></div>
+    <div class="tab" id="tab-chroma" role="tabpanel" hidden></div>
     <div class="tab" id="tab-zern" role="tabpanel" hidden></div>
     <div class="tab" id="tab-scatter" role="tabpanel" hidden></div>
     <div class="tab" id="tab-settings" role="tabpanel" hidden></div>

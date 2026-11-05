@@ -5,6 +5,7 @@ import { wavefront, fitZernike, zernikeName, bestFocus } from '../core/wavefront
 import { rayleigh, rayleighPhase, mie, miePhase, henyeyGreenstein, forwardBackward, surfaceTIS, surfaceTIST, ramanShift, ramanAntiStokesRatio } from '../core/scatter.js';
 import { LINES } from '../core/glass.js';
 import { imageNA } from '../core/imaging.js';
+import { powerSummary, bestImagePlane } from '../core/focus.js';
 import { WL_COLOR } from './layout-view.js';
 import { parseNumber } from './editor.js';
 
@@ -42,6 +43,61 @@ function numInput(label, value, unit, title, onInput, cls = '') {
   const inp = h('input', { type: 'text', inputmode: 'decimal', value: String(value), title, class: cls, spellcheck: 'false' });
   inp.addEventListener('input', () => onInput(parseNumber(inp.value), inp));
   return h('label', { class: 'field', title }, h('span', {}, label), inp, unit ? h('small', {}, unit) : null);
+}
+
+// ---------- 焦点・屈折力 ----------
+const sgn = (v, d) => { if (!Number.isFinite(v)) return '—'; const r = Math.abs(v) < 0.5 * 10 ** -d ? 0 : v; return `${r > 0 ? '+' : r < 0 ? '−' : '±'}${Math.abs(r).toFixed(d)}`; };
+export function renderFocus(el, sys, { onBest } = {}) {
+  el.replaceChildren();
+  const p = powerSummary(sys, LINES.d);
+  const b = bestImagePlane(sys);
+  const k = p.lastSurface;
+  const dist = (v) => (Number.isFinite(v) ? `${f(v, 2)} mm` : '∞');
+  el.append(
+    h('div', { class: 'metrics' },
+      h('div', { class: 'metric big', title: '系の屈折力 P = 1000 / f′(d 線 587.6 nm、像側は空気)' }, h('span', {}, '屈折力(ジオプター)'), h('b', {}, `${sgn(p.power, 3)} D`), h('small', {}, `焦点距離 f′ = ${dist(p.efl)}`)),
+      h('div', { class: 'metric', title: '後方頂点屈折力 = 1000 / バックフォーカス。眼鏡のレンズメーターで測る値' }, h('span', {}, '後方頂点屈折力'), h('b', {}, `${sgn(p.bvp, 3)} D`), h('small', {}, `バックフォーカス ${dist(p.bfl)}`)),
+      h('div', { class: 'metric', title: '前方頂点屈折力 = 1000 / フロントフォーカス' }, h('span', {}, '前方頂点屈折力'), h('b', {}, `${sgn(p.fvp, 3)} D`), h('small', {}, `フロントフォーカス ${dist(p.ffl)}`)),
+    ),
+    h('table', { class: 'kv' }, h('tbody', {},
+      h('tr', {}, h('td', {}, '後側焦点(平行光が集まる位置)'), h('td', {}, `最終面から ${dist(p.bfl)}(z = ${f(p.rearFocusZ, 2)})`)),
+      h('tr', {}, h('td', {}, '前側焦点'), h('td', {}, `第 1 面から手前へ ${dist(p.ffl)}(z = ${f(p.frontFocusZ, 2)})`)),
+      h('tr', {}, h('td', {}, `いまの物体距離 ${f(p.objectDistance, 1)} mm での像の位置(d 線)`), h('td', {}, `最終面から ${dist(p.imageDistance)}(近軸、横倍率 ${f(p.magnification, 4)})`)),
+    )),
+  );
+  // 波長ごとの像の位置
+  const rows = sys.wavelengths.map((l) => { const q = powerSummary(sys, l); return h('tr', {}, h('td', {}, h('span', { class: 'sw', style: `background:${WL_COLOR(l)}` }), ` ${(l * 1000).toFixed(0)} nm`), h('td', { class: 'num' }, `${sgn(q.power, 3)} D`), h('td', { class: 'num' }, f(q.imageDistance, 2))); });
+  el.append(h('h4', {}, '波長ごと'), h('table', { class: 'kv' }, h('thead', {}, h('tr', {}, h('th', {}, '波長'), h('th', {}, '屈折力'), h('th', {}, '最終面 → 像 [mm]'))), h('tbody', {}, ...rows)));
+  // 最良像面
+  el.append(h('h4', {}, '最良像面(結像性が最もよいスクリーン位置)'));
+  if (!b.ok) { el.append(h('p', { class: 'warn' }, b.message)); return; }
+  const cur = sys.surfaces[k].thickness;
+  const here = Math.abs(cur - b.distance) < 0.01;
+  el.append(
+    h('div', { class: 'metrics' },
+      h('div', { class: 'metric big' }, h('span', {}, '最良像面'), h('b', {}, `最終面から ${f(b.distance, 2)} mm`), h('small', {}, `近軸像面(520 nm)から ${sgn(b.distance - b.paraxialDistance, 2)} mm`)),
+      h('div', { class: 'metric' }, h('span', {}, 'その位置のぼけ(RMS スポット半径)'), h('b', {}, `${f(b.rms * 1000, 1)} µm`), h('small', {}, `視野 0 / 70 / 100 %: ${b.perField.map((x) => f(x.rms * 1000, 1)).join(' / ')} µm`)),
+    ),
+    h('p', { class: here ? 'note' : 'warn' }, here ? 'スクリーンは最良像面にあります。' : `いまのスクリーンは最終面から ${f(cur, 2)} mm(ぼけ ${f(b.rmsAtCurrent * 1000, 1)} µm)。`),
+    h('button', { type: 'button', class: 'primary', onclick: () => onBest?.() }, here ? '結像を計算' : 'スクリーンを最良像面へ移して結像'),
+    h('p', { class: 'note' }, '最良像面 = 3 波長を明所視の視感度で重み付けした多色の RMS スポット半径を、視野 0 / 70 / 100 %(重み 1 / 1 / 0.5)で合計した値が最小になる位置。屈折力・焦点は d 線の近軸値。'),
+  );
+  // ピント位置とぼけのグラフ
+  const box = h('div', { class: 'chart' });
+  el.append(h('h4', {}, 'スクリーン位置とぼけ(RMS スポット半径)'), box);
+  const xs = b.curve.map((c) => +c.distance.toFixed(3)), ys = b.curve.map((c) => c.rms * 1000);
+  const mark = (x) => xs.map((v) => (Math.abs(v - x) <= (xs[1] - xs[0]) / 2 ? ys[xs.indexOf(v)] : null));
+  requestAnimationFrame(() => {
+    const fg = cssVar('--fg', '#222');
+    const axis = (label) => ({ label, stroke: fg, grid: { stroke: 'rgba(128,128,128,0.25)' } });
+    new uPlot({
+      width: Math.max(260, box.clientWidth || 300), height: 190, scales: { x: { time: false } },
+      axes: [axis('最終面 → スクリーン [mm]'), axis('µm')],
+      series: [{}, { label: 'ぼけ', stroke: cssVar('--accent', '#2b6cb0'), width: 2 },
+        { label: '最良', stroke: '#1fa64a', width: 0, points: { show: true, size: 10, fill: '#1fa64a' } },
+        { label: 'いま', stroke: '#e5372c', width: 0, points: { show: true, size: 9, fill: '#e5372c' } }],
+    }, [xs, ys, mark(b.distance), mark(cur)], box);
+  });
 }
 
 // ---------- 色収差 ----------

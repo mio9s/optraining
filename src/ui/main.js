@@ -6,7 +6,8 @@ import { composeImage, mergeScatterCfg } from '../core/stray.js';
 import { createEditor, parseNumber, fmt } from './editor.js';
 import { createLayoutView, layoutData, WL_COLOR } from './layout-view.js';
 import { drawLinearImage, loadImageFile } from './image-view.js';
-import { renderChromatic, renderZernike, renderScatterPanels } from './analysis-view.js';
+import { renderChromatic, renderZernike, renderScatterPanels, renderFocus } from './analysis-view.js';
+import { focusBest } from '../core/focus.js';
 import { computeAll } from './worker.js';
 import { initAppearance, defaultAppearance } from './appearance/app.js';
 import { systemPalette } from './material-colors.js';
@@ -22,7 +23,7 @@ const state = {
   settings: { fieldGrid: 3, nPupil: 24, rays: 20000, fresnel: true, ghost: true, stray: true },
   result: null,
   resultStale: false,
-  ui: { zField: 0, zWl: 0.52, tab: 'chroma' },
+  ui: { zField: 0, zWl: 0.52, tab: 'focus' },
   edited: false,
   sampleKey: 'achromat',
 };
@@ -74,7 +75,8 @@ function renderTab() {
   const sys = state.valid;
   const t = state.ui.tab;
   try {
-    if (t === 'chroma') renderChromatic($('tab-chroma'), sys);
+    if (t === 'focus') renderFocus($('tab-focus'), sys, { onBest: bestFocusAndImage });
+    else if (t === 'chroma') renderChromatic($('tab-chroma'), sys);
     else if (t === 'zern') renderZernike($('tab-zern'), sys, state.ui);
   } catch (e) {
     console.error(e);
@@ -263,8 +265,10 @@ bindSysField('obj-h', (v) => (state.sys.object.height = v));
 bindSysField('scr-w', (v) => (state.sys.screen.width = v));
 bindSysField('scr-px', (v) => (state.sys.screen.pixels = v));
 
+const EDITED = '(編集済み)';
 function resetSampleLabels() {
-  for (const o of [...$('sample').options]) { if (SAMPLE_SYSTEMS[o.value]) o.textContent = SAMPLE_SYSTEMS[o.value].label; else o.remove(); }
+  // 読み込んだファイルの項目は残し、「(編集済み)」だけ外す(サンプルを選び直したときに消す)
+  for (const o of [...$('sample').options]) { if (SAMPLE_SYSTEMS[o.value]) o.textContent = SAMPLE_SYSTEMS[o.value].label; else if (o.textContent.endsWith(EDITED)) o.textContent = o.textContent.slice(0, -EDITED.length); }
 }
 function loadSystem(sys, { edited = false } = {}) {
   state.sys = sys; state.result = null;
@@ -284,9 +288,20 @@ $('sample').addEventListener('change', () => {
     $('sample').value = state.sampleKey; return;
   }
   if (!SAMPLE_SYSTEMS[$('sample').value]) return;
+  $('sample').querySelector('option[value="file"]')?.remove();
   state.sampleKey = $('sample').value;
   loadSystem(SAMPLE_SYSTEMS[state.sampleKey].make());
 });
+/** 最良像面へスクリーンを移し、結像画像まで計算する */
+function bestFocusAndImage() {
+  if (!validateSystem(state.sys).ok) { alert('入力エラーを先に直してください'); return; }
+  const { system, result } = focusBest(state.valid);
+  if (!result.ok) { alert(result.message); return; }
+  loadSystem(system, { edited: true });
+  selectTab('focus');
+  runImage();
+}
+$('btn-best').addEventListener('click', bestFocusAndImage);
 $('btn-focus').addEventListener('click', () => {
   if (!validateSystem(state.sys).ok) { alert('入力エラーを先に直してください'); return; }
   loadSystem(focusScreen(state.sys, 0.52), { edited: true });
@@ -310,6 +325,7 @@ $('file-sys').addEventListener('change', async () => {
     if (!v.ok) throw new Error(v.errors.map((e) => `行 ${e.row}: ${e.message}`).join('\n'));
     loadSystem(sys, { edited: false });
     // サンプル欄に読み込んだファイル名を表示
+    $('sample').querySelector('option[value="file"]')?.remove();
     $('sample').append(new Option(`ファイル: ${f.name}`, 'file', true, true));
     $('sample').value = 'file'; state.sampleKey = 'file'; state.edited = false;
     // 外観の設定はレンズデータを反映した後に読み込む(読み込んだ部品を自動再生成で消さない)
@@ -348,12 +364,14 @@ $('file').addEventListener('change', async () => {
   $('file').value = '';
 });
 
-document.querySelectorAll('[role=tab]').forEach((b) => b.addEventListener('click', () => {
-  state.ui.tab = b.dataset.tab;
-  document.querySelectorAll('[role=tab]').forEach((x) => x.setAttribute('aria-selected', String(x === b)));
-  document.querySelectorAll('.tab').forEach((t) => (t.hidden = t.id !== `tab-${b.dataset.tab}`));
+// 右パネルのタブ(モード切り替えのボタンは含めない)
+function selectTab(name) {
+  state.ui.tab = name;
+  document.querySelectorAll('#right .tabs [role=tab]').forEach((x) => x.setAttribute('aria-selected', String(x.dataset.tab === name)));
+  document.querySelectorAll('#right .tab').forEach((t) => (t.hidden = t.id !== `tab-${name}`));
   renderTab();
-}));
+}
+document.querySelectorAll('#right .tabs [role=tab]').forEach((b) => b.addEventListener('click', () => selectTab(b.dataset.tab)));
 
 renderScatterPanels($('tab-scatter'));
 renderSettings();
