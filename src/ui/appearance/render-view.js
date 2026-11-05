@@ -73,7 +73,7 @@ export async function renderStill(pool, s, passes, tag, onPass) {
   const w = s.width, h = s.height;
   const buf = { w, h, rgb: new Float32Array(w * h * 3), y: new Float32Array(w * h), n: new Float32Array(w * h), contrib: {}, passes: 0 };
   for (let p = 0; p < passes; p++) {
-    const res = await Promise.all(tiles(w, h, { camera: s.camera, env: s.env, lights, suppressInternal: !!s.suppressInternal }, p).map((j) => pool.submit(j, tag)));
+    const res = await Promise.all(tiles(w, h, { camera: s.camera, env: s.env, lights, suppressInternal: !!s.suppressInternal, exactSpectral: !!s.exactSpectral }, p).map((j) => pool.submit(j, tag)));
     if (res.some((r) => r === null)) return null; // 取り消し
     for (const m of res) addTile(buf, m);
     buf.passes = p + 1;
