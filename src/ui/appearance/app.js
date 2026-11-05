@@ -4,7 +4,7 @@ import { partsFromSystem, validateScene, OPAQUE, newId, placedProfile } from '..
 import { importProfiles } from '../../appearance/import.js';
 import { tessellate, bounds, segmentEvaluator } from '../../appearance/profile.js';
 import { COATINGS } from '../../appearance/thinfilm.js';
-import { ENV_PRESETS, defaultCamera, internalVisibility } from '../../appearance/render.js';
+import { ENV_PRESETS, defaultCamera, internalVisibility, cameraBasis } from '../../appearance/render.js';
 import { reflectanceVsAngle, reflectanceVsWavelength, lineProfile, boundaryContrast, contributionTable } from '../../appearance/analysis.js';
 import { buildTraceScene } from '../../appearance/nstrace.js';
 import { listPresets, refractiveIndex } from '../../core/glass.js';
@@ -218,25 +218,50 @@ export function initAppearance({ getSystem, getState, setState }) {
   }
 
   // ---------- 照明 ----------
+  // 光源: ID で管理し、一覧の削除・点灯はまとめて 1 か所で受ける(行の作り直しに影響されない)
+  let lightSeq = 0;
+  function ensureLightIds() {
+    for (const l of st.lights) {
+      if (!l.id) l.id = `L${Date.now().toString(36)}${(lightSeq++).toString(36)}`;
+      if (l.on === undefined) l.on = true;
+    }
+  }
+  function addLight(type) {
+    ensureLightIds();
+    const k = st.lights.filter((l) => l.type === type).length;
+    const base = type === 'point' ? { type, az: 40, el: 35, dist: 2.5, size: 4, power: 80 } : { type, az: -30, el: 50, dist: 2.5, size: 60, power: 8 };
+    // 追加するたびに少しずつ方向をずらす(同じ位置に重ならないように)
+    st.lights.push({ ...base, az: base.az + 25 * k, id: `L${Date.now().toString(36)}${(lightSeq++).toString(36)}`, on: true });
+    renderLights(); viewChanged();
+  }
   function renderLights() {
+    ensureLightIds();
     const box = $('ap-lights');
     box.replaceChildren();
+    if (!st.lights.length) { box.append(h('p', { class: 'note' }, '追加した光源はありません(背景・照明のプリセットの光だけで描画しています)。')); return; }
     st.lights.forEach((l, i) => {
       const f = (k, label, unit, title) => {
-        const inp = h('input', { type: 'text', value: String(l[k]), class: 'num', title });
-        inp.addEventListener('change', () => { const v = parseNumber(inp.value); if (Number.isFinite(v)) { l[k] = v; changed(false); } else inp.classList.add('invalid'); });
+        const inp = h('input', { type: 'text', value: String(l[k]), class: 'num', title, 'aria-label': `光源 ${i + 1} の${label}` });
+        inp.addEventListener('change', () => { const v = parseNumber(inp.value); if (Number.isFinite(v)) { inp.classList.remove('invalid'); l[k] = v; viewChanged(); } else inp.classList.add('invalid'); });
         return h('label', { class: 'field', title }, h('span', {}, label), inp, unit ? h('small', {}, unit) : null);
       };
-      box.append(h('div', { class: 'ap-light' }, h('b', {}, l.type === 'point' ? '点光源' : '面光源(蛍光灯)'),
-        f('az', '方位', '°', '光源の方向(0° = 物体側、90° = +x 側)'), f('el', '仰角', '°', ''), f('dist', '距離', '× 大きさ', 'シーンの大きさに対する倍率'),
-        f('size', '大きさ', 'mm', l.type === 'point' ? '球の直径' : '長さ(幅はその 1/8)'), f('power', '明るさ', '', '環境の白 = 1 に対する放射輝度'),
-        h('button', { type: 'button', onclick: () => { st.lights.splice(i, 1); renderLights(); changed(false); } }, '✕')));
+      const on = h('input', { type: 'checkbox', 'data-light-toggle': l.id, 'aria-label': `光源 ${i + 1} を点灯` });
+      on.checked = l.on !== false;
+      box.append(h('div', { class: `ap-light${l.on === false ? ' off' : ''}`, 'data-light': l.id },
+        h('div', { class: 'ap-light-head' },
+          h('label', { class: 'check', title: 'チェックを外すと一時的に消灯します' }, on, h('b', {}, ` 光源 ${i + 1}: ${l.type === 'point' ? '点光源' : '面光源(蛍光灯)'}`)),
+          h('button', { type: 'button', class: 'danger', 'data-light-del': l.id, title: 'この光源を削除', 'aria-label': `光源 ${i + 1} を削除` }, '削除')),
+        h('div', { class: 'ap-light-body' },
+          f('az', '方位', '°', '光源の方向(0° = 物体側、90° = +X 側)'), f('el', '仰角', '°', '上向きが +'),
+          f('dist', '距離', '× シーン径', 'シーンの大きさに対する倍率'),
+          f('size', l.type === 'point' ? '直径' : '長さ', 'mm', l.type === 'point' ? '光る球の直径' : '長さ(幅はその 1/8)'),
+          f('power', '明るさ', '', '環境の白 = 1 に対する放射輝度'))));
     });
   }
   function worldLights() {
     const info = { center: st.camera?.target ?? [0, 0, 0] };
     const size = (() => { let r = 1; for (const p of st.parts) { try { r = Math.max(r, bounds(tessellate(placedProfile(p))).rMax * 2); } catch { /* */ } } return r; })();
-    return st.lights.map((l) => {
+    return st.lights.filter((l) => l.on !== false).map((l) => {
       const az = (l.az * Math.PI) / 180, el = (l.el * Math.PI) / 180, d = l.dist * size;
       const dir = [Math.cos(el) * Math.sin(az), Math.sin(el), -Math.cos(el) * Math.cos(az)];
       const pos = [info.center[0] + dir[0] * d, info.center[1] + dir[1] * d, info.center[2] + dir[2] * d];
@@ -263,8 +288,41 @@ export function initAppearance({ getSystem, getState, setState }) {
     view.setMaxPasses(st.quality === 'standard' ? 4 : 32);
     view.update(renderState(), { keepLine });
   }
+  /** 右下の座標軸(一般的な 3D ソフトと同じ X 赤・Y 緑・Z 青。Z = 光軸 = 光の進む向き) */
+  function drawAxes() {
+    const c = $('ap-axes');
+    if (!c || !st.camera) return;
+    const css = 108, dpr = devicePixelRatio || 1;
+    c.width = css * dpr; c.height = css * dpr;
+    const ctx = c.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, css, css);
+    const cb = cameraBasis(st.camera), o = css / 2, L = 34;
+    ctx.fillStyle = 'rgba(18,18,22,0.62)'; ctx.strokeStyle = 'rgba(255,255,255,0.55)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(o, o, o - 2, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+    const axes = [['X', [1, 0, 0], '#ff5c5c'], ['Y', [0, 1, 0], '#5fe36b'], ['Z', [0, 0, 1], '#5c9dff']]
+      .map(([n, v, col]) => ({ n, col, x: v[0] * cb.right[0] + v[1] * cb.right[1] + v[2] * cb.right[2], y: -(v[0] * cb.up[0] + v[1] * cb.up[1] + v[2] * cb.up[2]), depth: v[0] * cb.fwd[0] + v[1] * cb.fwd[1] + v[2] * cb.fwd[2] }))
+      .sort((a, b) => b.depth - a.depth); // 奥へ向かう軸から先に描く
+    for (const a of axes) {
+      const ex = o + a.x * L, ey = o + a.y * L, len = Math.hypot(a.x, a.y);
+      ctx.globalAlpha = a.depth > 0.3 ? 0.55 : 1; // 画面の奥へ向かう軸はうすく
+      ctx.strokeStyle = a.col; ctx.fillStyle = a.col; ctx.lineWidth = 3; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(o, o); ctx.lineTo(ex, ey); ctx.stroke();
+      if (len > 0.15) { // 矢印の先
+        const ux = a.x / len, uy = a.y / len;
+        ctx.beginPath(); ctx.moveTo(ex + ux * 6, ey + uy * 6); ctx.lineTo(ex - uy * 4, ey + ux * 4); ctx.lineTo(ex + uy * 4, ey - ux * 4); ctx.closePath(); ctx.fill();
+      } else { ctx.beginPath(); ctx.arc(o, o, 4, 0, 2 * Math.PI); ctx.fill(); } // ほぼ視線方向: 点で表示
+      const lx = len > 0.15 ? ex + (a.x / len) * 14 : o + 10, ly = len > 0.15 ? ey + (a.y / len) * 14 : o - 10;
+      ctx.font = 'bold 13px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,0.8)'; ctx.strokeText(a.n, lx, ly); ctx.fillText(a.n, lx, ly);
+    }
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.font = '9px system-ui, sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('Z = 光軸', o, css - 9);
+  }
+
   /** 視点・照明だけの変更(部品リストは作り直さない) */
-  function viewChanged() { syncCameraInputs(); setState(st); startRender(); }
+  function viewChanged() { syncCameraInputs(); drawAxes(); setState(st); startRender(); }
   function changed(geometry, refit = false) {
     if (refit) st.camera = defaultCamera(st.parts);
     renderParts(); syncCameraInputs(); setState(st);
@@ -444,8 +502,21 @@ export function initAppearance({ getSystem, getState, setState }) {
         st.parts.push(np); changed(true, true);
       });
     });
-    $('ap-add-point').addEventListener('click', () => { st.lights.push({ type: 'point', az: 40, el: 35, dist: 2.5, size: 4, power: 80 }); renderLights(); changed(false); });
-    $('ap-add-rect').addEventListener('click', () => { st.lights.push({ type: 'rect', az: -30, el: 50, dist: 2.5, size: 60, power: 8 }); renderLights(); changed(false); });
+    $('ap-add-point').addEventListener('click', () => addLight('point'));
+    $('ap-add-rect').addEventListener('click', () => addLight('rect'));
+    $('ap-clear-lights').addEventListener('click', () => { if (!st.lights.length) return; st.lights.splice(0); renderLights(); viewChanged(); });
+    $('ap-lights').addEventListener('click', (e) => {
+      const del = e.target.closest('[data-light-del]');
+      if (!del) return;
+      const i = st.lights.findIndex((l) => l.id === del.dataset.lightDel);
+      if (i >= 0) { st.lights.splice(i, 1); renderLights(); viewChanged(); }
+    });
+    $('ap-lights').addEventListener('change', (e) => {
+      const t = e.target.closest('[data-light-toggle]');
+      if (!t) return;
+      const l = st.lights.find((x) => x.id === t.dataset.lightToggle);
+      if (l) { l.on = t.checked; t.closest('.ap-light').classList.toggle('off', !l.on); viewChanged(); }
+    });
     for (const k of ['azimuth', 'elevation', 'distance', 'fov']) $(`ap-cam-${k}`).addEventListener('change', () => { const v = parseNumber($(`ap-cam-${k}`).value); if (Number.isFinite(v)) { st.camera[k] = v; viewChanged(); } });
     $('ap-cam-reset').addEventListener('click', () => { st.camera = defaultCamera(st.parts); viewChanged(); });
     $('ap-quality').value = st.quality ?? 'standard';
@@ -461,12 +532,12 @@ export function initAppearance({ getSystem, getState, setState }) {
     $('ap-auto').addEventListener('change', () => view.setExposure(2 ** +$('ap-exposure').value, $('ap-auto').checked));
     view = createRenderView($('ap-canvas'), pool, {
       onProgress: (p, m, low) => { $('ap-status').textContent = low ? '回転中(粗い表示)…' : p === 0 ? '描画中…' : p < m ? `精細化中… ${p}/${m} パス(色は 1 パス目から正しく表示されます)` : `完了(${m} パス)`; },
-      onCamera: () => { syncCameraInputs(); setState(st); },
+      onCamera: () => { syncCameraInputs(); drawAxes(); setState(st); },
       onLine, onFrame,
       onExposure: (ex) => { $('ap-exposure-out').textContent = `×${ex < 10 ? ex.toFixed(2) : ex.toPrecision(3)}`; },
       onError: (m) => { $('ap-status').textContent = `エラー: ${m}`; },
     });
-    renderParts(); renderLights(); renderFaces(); syncCameraInputs();
+    renderParts(); renderLights(); renderFaces(); syncCameraInputs(); drawAxes();
     new ResizeObserver(() => drawSection()).observe($('ap-section'));
   }
   let started = false;
@@ -481,7 +552,7 @@ export function initAppearance({ getSystem, getState, setState }) {
       startRender(true);
     },
     markSynced() { st.sysSig = sysSig(); setState(st); },
-    reload() { st.sysSig = sysSig(); if (started) { if (!st.parts) regenerate(); if (!st.camera) st.camera = defaultCamera(st.parts); $('ap-env').value = st.env; $('ap-res').value = st.res; renderParts(); renderLights(); renderFaces(); syncCameraInputs(); startRender(); } },
+    reload() { st.sysSig = sysSig(); if (started) { if (!st.parts) regenerate(); if (!st.camera) st.camera = defaultCamera(st.parts); $('ap-env').value = st.env; $('ap-res').value = st.res; renderParts(); renderLights(); renderFaces(); syncCameraInputs(); drawAxes(); startRender(); } },
     state: () => st,
   };
 }

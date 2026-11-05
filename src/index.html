@@ -124,7 +124,10 @@
         <label class="field inline">解像度 <select id="ap-res"><option value="s">320×240</option><option value="m">640×480</option><option value="l">960×720</option></select></label>
       </div>
     </div>
-    <canvas id="ap-canvas" aria-label="レンズの外観" tabindex="0"></canvas>
+    <div class="ap-view">
+      <canvas id="ap-canvas" aria-label="レンズの外観" tabindex="0"></canvas>
+      <canvas id="ap-axes" class="ap-axes" aria-hidden="true" title="座標軸: Z = 光軸(光の進む向き)"></canvas>
+    </div>
     <div class="ap-statusbar"><span id="ap-status">準備中…</span><span class="muted">ドラッグで回転、ホイールで拡大縮小</span></div>
     <div class="imgctl">
       <label class="field inline" title="レンズを見る方向。0° = 物体側(正面)から、90° = 真横から"><span>方位</span><input type="text" id="ap-cam-azimuth" class="num"><small>°</small></label>
@@ -143,6 +146,7 @@
       <legend>光源の追加</legend>
       <button type="button" id="ap-add-point">点光源</button>
       <button type="button" id="ap-add-rect">面光源(蛍光灯)</button>
+      <button type="button" id="ap-clear-lights" class="secondary">すべて削除</button>
       <div id="ap-lights"></div>
     </fieldset>
   </section>
