@@ -47,7 +47,7 @@ function numInput(label, value, unit, title, onInput, cls = '') {
 
 // ---------- 焦点・屈折力 ----------
 const sgn = (v, d) => { if (!Number.isFinite(v)) return '—'; const r = Math.abs(v) < 0.5 * 10 ** -d ? 0 : v; return `${r > 0 ? '+' : r < 0 ? '−' : '±'}${Math.abs(r).toFixed(d)}`; };
-export function renderFocus(el, sys, { onBest } = {}) {
+export function renderFocus(el, sys, { onBest, onInfinity } = {}) {
   el.replaceChildren();
   const p = powerSummary(sys, LINES.d);
   const b = bestImagePlane(sys);
@@ -62,7 +62,7 @@ export function renderFocus(el, sys, { onBest } = {}) {
     h('table', { class: 'kv' }, h('tbody', {},
       h('tr', {}, h('td', {}, '後側焦点(平行光が集まる位置)'), h('td', {}, `最終面から ${dist(p.bfl)}(z = ${f(p.rearFocusZ, 2)})`)),
       h('tr', {}, h('td', {}, '前側焦点'), h('td', {}, `第 1 面から手前へ ${dist(p.ffl)}(z = ${f(p.frontFocusZ, 2)})`)),
-      h('tr', {}, h('td', {}, `いまの物体距離 ${f(p.objectDistance, 1)} mm での像の位置(d 線)`), h('td', {}, `最終面から ${dist(p.imageDistance)}(近軸、横倍率 ${f(p.magnification, 4)})`)),
+      h('tr', {}, h('td', {}, p.objectDistance >= 1e5 ? 'いまの物体距離(無限遠、1 km 以上)での像の位置(d 線)' : `いまの物体距離 ${f(p.objectDistance, 1)} mm での像の位置(d 線)`), h('td', {}, `最終面から ${dist(p.imageDistance)}(近軸、横倍率 ${f(p.magnification, 4)})`)),
     )),
   );
   // 波長ごとの像の位置
@@ -79,7 +79,12 @@ export function renderFocus(el, sys, { onBest } = {}) {
       h('div', { class: 'metric' }, h('span', {}, 'その位置のぼけ(RMS スポット半径)'), h('b', {}, `${f(b.rms * 1000, 1)} µm`), h('small', {}, `視野 0 / 70 / 100 %: ${b.perField.map((x) => f(x.rms * 1000, 1)).join(' / ')} µm`)),
     ),
     h('p', { class: here ? 'note' : 'warn' }, here ? 'スクリーンは最良像面にあります。' : `いまのスクリーンは最終面から ${f(cur, 2)} mm(ぼけ ${f(b.rmsAtCurrent * 1000, 1)} µm)。`),
-    h('button', { type: 'button', class: 'primary', onclick: () => onBest?.() }, here ? '結像を計算' : 'スクリーンを最良像面へ移して結像'),
+    h('p', { class: 'note' }, p.objectDistance >= 1e5
+      ? `物体は無限遠(1 km 以上)にあるので、最良像面はレンズ固有の焦点(最終面から ${dist(p.bfl)}、近軸 d 線)の付近になります。収差と色収差のバランスで少しずれます。`
+      : `最良像面は、いまの物体距離(${f(p.objectDistance, 1)} mm)にある物体の像が最もシャープになるスクリーン位置です(物体は動かしません)。レンズ固有の焦点(物体が無限遠のとき)は最終面から ${dist(p.bfl)} です。`),
+    h('div', { class: 'row' },
+      h('button', { type: 'button', class: 'primary', onclick: () => onBest?.() }, here ? 'この位置で結像' : 'スクリーンを最良像面へ移して結像'),
+      Number.isFinite(p.efl) && p.objectDistance < 1e5 ? h('button', { type: 'button', class: 'secondary', title: '物体を 1 km 先へ移し(視野の角度は保つよう物体の大きさも比例させる)、焦点面で結像します', onclick: () => onInfinity?.() }, '物体を無限遠に置いて焦点面で結像') : null),
     h('p', { class: 'note' }, '最良像面 = 3 波長を明所視の視感度で重み付けした多色の RMS スポット半径を、視野 0 / 70 / 100 %(重み 1 / 1 / 0.5)で合計した値が最小になる位置。屈折力・焦点は d 線の近軸値。'),
   );
   // ピント位置とぼけのグラフ

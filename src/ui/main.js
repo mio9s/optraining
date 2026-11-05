@@ -75,7 +75,7 @@ function renderTab() {
   const sys = state.valid;
   const t = state.ui.tab;
   try {
-    if (t === 'focus') renderFocus($('tab-focus'), sys, { onBest: bestFocusAndImage });
+    if (t === 'focus') renderFocus($('tab-focus'), sys, { onBest: bestFocusAndImage, onInfinity: infinityFocusAndImage });
     else if (t === 'chroma') renderChromatic($('tab-chroma'), sys);
     else if (t === 'zern') renderZernike($('tab-zern'), sys, state.ui);
   } catch (e) {
@@ -108,15 +108,15 @@ function runImage() {
     id: ++jobId, sys: state.valid, objectImg: objectImage(), scatterCfg: state.scatterCfg,
     settings: { ...state.settings, stray: state.settings.stray },
   };
-  $('btn-image').disabled = true;
+  $('btn-image').disabled = true; $('btn-best').disabled = true;
   $('btn-image').textContent = '計算中…';
   setProgress(0, '準備');
   const done = (r) => {
-    $('btn-image').disabled = false; $('btn-image').textContent = '結像を計算';
+    $('btn-image').disabled = false; $('btn-best').disabled = false; $('btn-image').textContent = 'いまの位置で結像';
     state.result = r; state.resultStale = false; showResult();
   };
   const fail = (m) => {
-    $('btn-image').disabled = false; $('btn-image').textContent = '結像を計算';
+    $('btn-image').disabled = false; $('btn-best').disabled = false; $('btn-image').textContent = 'いまの位置で結像';
     setProgress(1, ''); $('img-cap').textContent = `エラー: ${m}`;
   };
   const w = getWorker();
@@ -234,7 +234,7 @@ function renderSettings() {
       chk('フレネル透過損失を含める', 'fresnel', '無コート面の反射による減光'),
       chk('ゴーストを計算', 'ghost', '2 回反射の経路を追跡'),
       chk('散乱・ラマンを計算', 'stray', 'モンテカルロ(時間がかかります)')),
-    Object.assign(document.createElement('p'), { className: 'note', textContent: '設定の変更は次の「結像を計算」から反映されます。' }),
+    Object.assign(document.createElement('p'), { className: 'note', textContent: '設定の変更は次の結像の計算から反映されます。' }),
   );
 }
 
@@ -275,7 +275,7 @@ function loadSystem(sys, { edited = false } = {}) {
   resetSampleLabels(); state.edited = false;
   if (edited) markEdited();
   editor.render(); syncSysFields();
-  $('img-cap').textContent = '結像画像(「結像を計算」を押してください)';
+  $('img-cap').textContent = '結像画像(「最良像面へ合わせて結像」または「いまの位置で結像」を押してください)';
   $('img-cap').classList.remove('warn');
   const c = $('img-canvas'); c.getContext('2d').clearRect(0, 0, c.width, c.height);
   $('budget').replaceChildren();
@@ -302,6 +302,18 @@ function bestFocusAndImage() {
   runImage();
 }
 $('btn-best').addEventListener('click', bestFocusAndImage);
+/** 物体を無限遠(1 km)に置き、焦点面(最良像面)で結像。視野の角度は保つよう物体の大きさも比例させる */
+function infinityFocusAndImage() {
+  if (!validateSystem(state.sys).ok) { alert('入力エラーを先に直してください'); return; }
+  const s = structuredClone(state.valid);
+  const far = 1e6, k = far / s.surfaces[0].thickness;
+  s.surfaces[0].thickness = far; s.object.height *= k; s.surfaces[0].diameter = Math.max(s.surfaces[0].diameter * k, 2.5 * s.object.height);
+  const { system, result } = focusBest(s);
+  if (!result.ok) { alert(result.message); return; }
+  loadSystem(system, { edited: true });
+  selectTab('focus');
+  runImage();
+}
 $('btn-focus').addEventListener('click', () => {
   if (!validateSystem(state.sys).ok) { alert('入力エラーを先に直してください'); return; }
   loadSystem(focusScreen(state.sys, 0.52), { edited: true });

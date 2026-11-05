@@ -26,7 +26,6 @@
     <h2 id="h-lde">① レンズデータ <small>(光は左 → 右へ進みます)</small></h2>
     <div class="row lde-tools">
       <label class="field inline">サンプル系 <select id="sample"></select></label>
-      <button type="button" id="btn-best" class="primary" title="結像性が最もよい位置(視感度で重み付けした多色のスポットが最小)へスクリーンを移し、結像画像を計算します">最良像面へ合わせて結像</button>
       <button type="button" id="btn-focus" class="secondary" title="スクリーンを近軸像面(520 nm)へ移動します">近軸像面へ(520 nm)</button>
     </div>
     <div id="editor"></div>
@@ -56,7 +55,8 @@
     <div class="panel-head">
       <h2>③ 結像</h2>
       <div class="tools">
-        <button type="button" id="btn-image" class="primary">結像を計算</button>
+        <button type="button" id="btn-best" class="primary" title="いまの物体距離のまま、結像性が最もよい位置(視感度で重み付けした多色のスポットが最小)へスクリーンを移して結像画像を計算します">最良像面へ合わせて結像</button>
+        <button type="button" id="btn-image" class="secondary" title="スクリーンを動かさず、いまの位置で結像画像を計算します">いまの位置で結像</button>
       </div>
     </div>
     <div class="imgctl">
@@ -67,7 +67,7 @@
     <div class="progress" id="progress" hidden><div class="bar"><i></i></div><span></span></div>
     <div class="images">
       <figure><canvas id="obj-canvas" aria-label="物体"></canvas><figcaption id="obj-cap">物体</figcaption></figure>
-      <figure><canvas id="img-canvas" aria-label="結像画像"></canvas><figcaption id="img-cap">結像画像(「結像を計算」を押してください)</figcaption></figure>
+      <figure><canvas id="img-canvas" aria-label="結像画像"></canvas><figcaption id="img-cap">結像画像(「最良像面へ合わせて結像」または「いまの位置で結像」を押してください)</figcaption></figure>
     </div>
     <div class="imgctl">
       <label class="check"><input type="checkbox" id="c-direct" checked> 直接光</label>
@@ -182,7 +182,7 @@
     <li>アイリス(絞り)は独立した行として好きな位置に置けます。直径を小さくすると光束が絞られます。</li>
     <li>入力が不正なセルは赤枠になり、計算は直前の正しい状態のまま続きます。</li>
     <li><b>② 断面図</b>は入力に合わせて自動更新されます。青 450 nm / 緑 520 nm / 赤 620 nm。</li>
-    <li><b>③ 結像</b>: パターンを選ぶか画像を読み込み、「結像を計算」を押します。PSF(回折または幾何)を畳み込んだ像、ゴースト、散乱光、ラマン光を合成表示します。</li>
+    <li><b>③ 結像</b>: パターンを選ぶか画像を読み込み、「最良像面へ合わせて結像」(スクリーンを最もシャープな位置へ移してから計算)か「いまの位置で結像」を押します。PSF(回折または幾何)を畳み込んだ像、ゴースト、散乱光、ラマン光を合成表示します。</li>
     <li>右側のタブで色収差、ゼルニケ係数、散乱の各公式、散乱の設定を確認・変更できます。</li>
     <li><b>外観タブ</b>: 部品(レンズ・オイル層・鏡筒など)を色々な角度から見た画像を描き、界面の反射が境界として見えるかを確かめます。部品の断面は自動生成のほか、描画・SVG / DXF / CSV 取り込みで作れます。</li>
     <li>編集内容はこのブラウザに自動保存され、次回開いたときに復元されます。「保存」で JSON ファイルに書き出し、「読込…」で戻せます。</li>
