@@ -9,6 +9,7 @@ import { drawLinearImage, loadImageFile } from './image-view.js';
 import { renderChromatic, renderZernike, renderScatterPanels } from './analysis-view.js';
 import { computeAll } from './worker.js';
 import { initAppearance, defaultAppearance } from './appearance/app.js';
+import { systemPalette } from './material-colors.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -61,6 +62,7 @@ function runAnalysis(refit = false) {
   if (v.ok) { state.valid = structuredClone(state.sys); saveLocal(); }
   const sys = state.valid;
   try {
+    renderLegend();
     layout.update(layoutData(sys, { rays: 7, ghosts: $('show-ghost').checked }), refit);
   } catch (e) { console.error(e); }
   renderTab();
@@ -247,7 +249,12 @@ function syncSysFields() {
     s.innerHTML = `<i class="sw" style="background:${WL_COLOR(l)}"></i>${(l * 1000).toFixed(0)} nm`;
     return s;
   }));
-  $('layout-legend').innerHTML = state.sys.wavelengths.map((l) => `<span><i class="sw" style="background:${WL_COLOR(l)}"></i>${(l * 1000).toFixed(0)} nm</span>`).join('') + '<span><i class="sw glass"></i>プリセットガラス</span><span><i class="sw custom"></i>カスタム媒質(nd・νd 指定)</span><span><i class="sw ghost"></i>ゴースト</span>';
+  renderLegend();
+}
+function renderLegend() {
+  const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+  const mats = [...systemPalette(state.valid).values()].map((c) => `<span class="mat-legend"><i class="sw mat" style="background:${c.fill(0.55)};border-color:${c.solid}"></i>${esc(c.name)}</span>`).join('');
+  $('layout-legend').innerHTML = state.valid.wavelengths.map((l) => `<span><i class="sw" style="background:${WL_COLOR(l)}"></i>${(l * 1000).toFixed(0)} nm 光線</span>`).join('') + mats + '<span><i class="sw ghost"></i>ゴースト</span>';
 }
 function bindSysField(id, apply) {
   $(id).addEventListener('input', () => { apply(parseNumber($(id).value)); markEdited(); editor.markErrors(); scheduleAnalysis(); });

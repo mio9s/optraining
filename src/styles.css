@@ -224,3 +224,10 @@ body[data-mode=appearance] { --mode: var(--mode-appearance); }
 
 .ap-view { position: relative; }
 .ap-axes { position: absolute; right: 8px; bottom: 8px; width: 108px; height: 108px; pointer-events: none; }
+
+/* 材料の色(断面図と表で共通) */
+table.lde tr.has-mat td:first-child { box-shadow: inset 5px 0 0 var(--mat); }
+table.lde tr.has-mat td.mat { background: var(--mat-bg); }
+table.lde tr.has-mat td.mat select { border-color: var(--mat); }
+.sw.mat { border: 1px solid; }
+.mat-legend { font-weight: 500; }

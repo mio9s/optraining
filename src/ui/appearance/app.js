@@ -10,6 +10,7 @@ import { buildTraceScene } from '../../appearance/nstrace.js';
 import { listPresets, refractiveIndex } from '../../core/glass.js';
 import { parseNumber } from '../editor.js';
 import { createPool, createRenderView, renderStill, drawBuffer } from './render-view.js';
+import { materialPalette, materialKey } from '../material-colors.js';
 import { openProfileEditor } from './profile-editor.js';
 
 const h = (tag, attrs = {}, ...kids) => {
@@ -72,6 +73,7 @@ export function initAppearance({ getSystem, getState, setState }) {
     box.replaceChildren();
     const v = validateScene(st.parts);
     const bad = new Set(v.errors.map((e) => e.part));
+    const pal = materialPalette(st.parts.map((p) => p.material));
     st.parts.forEach((p, i) => {
       const vis = h('input', { type: 'checkbox', title: '表示する', 'aria-label': `${p.name} を表示` }); vis.checked = p.visible !== false;
       vis.addEventListener('change', () => { p.visible = vis.checked; changed(true); });
@@ -79,7 +81,8 @@ export function initAppearance({ getSystem, getState, setState }) {
       name.addEventListener('change', () => { p.name = name.value; changed(false); });
       const dz = h('input', { type: 'text', value: String(p.zOffset ?? 0), class: 'num', title: 'z 方向の移動量 [mm]', 'aria-label': `${p.name} の z オフセット` });
       dz.addEventListener('change', () => { const x = parseNumber(dz.value); if (Number.isFinite(x)) { p.zOffset = x; changed(true); } else dz.classList.add('invalid'); });
-      const row = h('div', { class: `ap-part${bad.has(p.id) ? ' invalid' : ''}` },
+      const col = pal.get(materialKey(p.material));
+      const row = h('div', { class: `ap-part${bad.has(p.id) ? ' invalid' : ''}`, style: col ? `border-left: 5px solid ${col.solid}` : p.material.type === 'opaque' ? 'border-left: 5px solid #555' : null },
         h('div', { class: 'ap-row' }, vis, name, h('span', { class: 'muted' }, p.source === 'auto' ? '自動' : p.source === 'import' ? '取込' : '描画')),
         h('div', { class: 'ap-row' }, materialSelect(p),
           p.material.type === 'model' ? modelInputs(p) : null,
@@ -146,13 +149,13 @@ export function initAppearance({ getSystem, getState, setState }) {
     const ed = vis.map((p) => { try { const e = tessellate(placedProfile(p)); const b = bounds(e); rMax = Math.max(rMax, b.rMax); z0 = Math.min(z0, b.zMin); z1 = Math.max(z1, b.zMax); return e; } catch { return []; } });
     const s = Math.min((W - 20) / Math.max(z1 - z0, 1e-3), (H - 20) / (2 * rMax));
     const X = (z) => 10 + (z - z0) * s + ((W - 20) - (z1 - z0) * s) / 2, Y = (r) => H / 2 - r * s;
-    const fill = { glass: 'rgba(110,165,230,0.35)', model: 'rgba(230,160,40,0.45)', opaque: 'rgba(60,60,60,0.8)' };
+    const pal = materialPalette(st.parts.map((p) => p.material));
     vis.forEach((p, i) => {
       for (const m of [1, -1]) {
         ctx.beginPath();
         ed[i].forEach((e, k) => { if (!k) ctx.moveTo(X(e.a[1]), Y(m * e.a[0])); ctx.lineTo(X(e.b[1]), Y(m * e.b[0])); });
         ctx.closePath();
-        ctx.fillStyle = p.material.type === 'opaque' ? fill.opaque : p.material.type === 'model' ? fill.model : fill.glass;
+        ctx.fillStyle = p.material.type === 'opaque' ? 'rgba(60,60,60,0.8)' : pal.get(materialKey(p.material))?.fill(0.45) ?? 'rgba(110,165,230,0.35)';
         ctx.fill(); ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.lineWidth = 0.8; ctx.stroke();
       }
     });

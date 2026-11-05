@@ -1,6 +1,7 @@
 // レンズデータエディタ(Zemax 風の表)
 import { listPresets } from '../core/glass.js';
 import { validateSystem } from '../core/system.js';
+import { systemPalette, materialKey } from './material-colors.js';
 
 const KIND_LABEL = { object: '物体面', surface: 'レンズ面', iris: 'アイリス', screen: 'スクリーン' };
 const PRESETS = listPresets();
@@ -131,8 +132,10 @@ export function createEditor(container, getSys, onChange) {
       el('th', {}, '操作'),
     )));
     const body = el('tbody');
+    const pal = systemPalette(sys);
     sys.surfaces.forEach((s, i) => {
-      const tr = el('tr', { class: `k-${s.kind}` }, el('td', { class: 'idx' }, String(i)), kindCell(i, s, n));
+      const col = s.kind === 'surface' ? pal.get(materialKey(s.material)) : null;
+      const tr = el('tr', { class: `k-${s.kind}${col ? ' has-mat' : ''}`, style: col ? `--mat:${col.solid};--mat-bg:${col.fill(0.16)}` : null, title: col ? `この面の右側(次の面まで)は ${col.name}。断面図の同じ色の部分` : null }, el('td', { class: 'idx' }, String(i)), kindCell(i, s, n));
       if (s.kind === 'surface') tr.append(numberCell(i, 'radius', s.radius, { allowInf: true, title: '曲率半径', placeholder: 'inf' }));
       else tr.append(dash(s.kind === 'iris' ? 'アイリスは平面' : '平面'));
       if (s.kind === 'screen') tr.append(dash('最終面'));
