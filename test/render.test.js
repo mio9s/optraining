@@ -91,3 +91,17 @@ test('bundled 16-wavelength mode agrees with exact per-wavelength mode (dispersi
   const exact128 = renderImage([lens], { ...opts, passes: 128, exactSpectral: true });
   assert.ok(rms(fast64, exact128) <= rms(exact, exact128) * 1.2, `fast64 ${rms(fast64, exact128)} vs exact64 noise ${rms(exact, exact128)}`);
 });
+test('grid panel: lines are straight outside the lens (no lens → straight, evenly spaced)', async () => {
+  const { gridPanel } = await import('../src/appearance/render.js');
+  // 何もない場面: 画面の各行で、縦線の位置が行によらず同じ(直線)
+  const cam = { target: [0, 0, 0], azimuth: 30, elevation: 20, distance: 100, fov: 30 };
+  const img = renderImage([], { camera: cam, env: { type: 'grid' }, width: 96, height: 72, passes: 1 });
+  const darkCols = (row) => { const out = []; for (let x = 0; x < 96; x++) if (img.y[row * 96 + x] < 0.3) out.push(x); return out; };
+  const firstEdges = (cols) => cols.filter((x, i) => i === 0 || cols[i - 1] !== x - 1);
+  const rows = [10, 30, 60].map((r) => firstEdges(darkCols(r)));
+  // 横線に当たった行は除外し、縦線の位置を比較
+  const vert = rows.filter((r) => r.length >= 2 && r.length <= 12);
+  assert.ok(vert.length >= 2);
+  for (const r of vert) assert.deepEqual(r, vert[0]);
+  assert.ok(gridPanel({ type: 'room' }, null, cam, {}).type === 'room');
+});

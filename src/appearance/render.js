@@ -56,21 +56,31 @@ export const ENV_PRESETS = {
   room: { label: '明るい室内' },
   dark: { label: '暗室 + スポット光' },
   white: { label: '白背景' },
-  grid: { label: '格子背景(歪みの確認)' },
+  grid: { label: '格子パネル(歪みの確認)' },
   black: { label: '黒背景' },
 };
-/** 方向 d(単位)の環境放射輝度 */
-export function envRadiance(env, d) {
+/**
+ * 環境放射輝度。d: 方向(単位)、o: 光線の始点(格子パネルとの交点を求めるのに使う)。
+ * grid: レンズの後ろに、カメラと正対する平らな格子パネル(env.plane)を置く。レンズの外では格子は直線に見え、
+ *       レンズを通した部分だけが屈折で歪む。パネルに当たらない方向は一様な灰色。
+ */
+export function envRadiance(env, d, o) {
   const t = env?.type ?? 'room';
   if (typeof env?.fn === 'function') return env.fn(d);
   if (t === 'black') return 0;
   if (t === 'white') return 1;
   if (t === 'dark') return 0.01;
   if (t === 'grid') {
-    // 緯度経度 10° 刻みの黒い線(太さ 0.6°)
-    const lat = (Math.asin(Math.max(-1, Math.min(1, d[1]))) * 180) / Math.PI, lon = (Math.atan2(d[0], d[2]) * 180) / Math.PI;
-    const near = (a) => { const m = ((a % 10) + 10) % 10; return Math.min(m, 10 - m) < 0.3; };
-    return near(lat) || near(lon) ? 0.05 : 0.9;
+    const pl = env.plane;
+    if (!pl || !o) return 0.75;
+    const den = d[0] * pl.n[0] + d[1] * pl.n[1] + d[2] * pl.n[2];
+    if (den >= -1e-9) return 0.6; // パネルと反対側(カメラ側)へ向かう光
+    const tt = ((pl.p[0] - o[0]) * pl.n[0] + (pl.p[1] - o[1]) * pl.n[1] + (pl.p[2] - o[2]) * pl.n[2]) / den;
+    if (tt <= 0) return 0.6;
+    const q = [o[0] + tt * d[0] - pl.p[0], o[1] + tt * d[1] - pl.p[1], o[2] + tt * d[2] - pl.p[2]];
+    const a = (q[0] * pl.u[0] + q[1] * pl.u[1] + q[2] * pl.u[2]) / pl.spacing, b = (q[0] * pl.v[0] + q[1] * pl.v[1] + q[2] * pl.v[2]) / pl.spacing;
+    const near = (x) => { const f = x - Math.floor(x); return Math.min(f, 1 - f) < pl.halfWidth; };
+    return near(a) || near(b) ? 0.05 : 0.9;
   }
   // room: 天井が明るく床が暗いグラデーション + 窓(+x 側の明るい長方形)
   const y = d[1];
@@ -163,7 +173,7 @@ function radiance(ctx, o, d, lam, depth, firstRefl, w) {
   const lh = lightHit(ctx.lights, o, d, hit ? hit.t : Infinity);
   const term = (L) => { if (firstRefl && ctx.contrib) ctx.contrib[firstRefl] = (ctx.contrib[firstRefl] ?? 0) + w * L; return L; };
   if (lh.t < (hit ? hit.t : Infinity)) return term(lh.L);
-  if (!hit) return term(envRadiance(ctx.env, d));
+  if (!hit) return term(envRadiance(ctx.env, d, o));
   const f = interfaceAt(ctx.scene, hit, d, lam / 1000);
   const P = hit.point;
   const key = faceKey(hit);
@@ -229,7 +239,7 @@ function radianceV(ctx, o, d, depth, firstRefl, thr) {
   const lh = lightHit(ctx.lights, o, d, hit ? hit.t : Infinity);
   let Lterm = -1;
   if (lh.t < (hit ? hit.t : Infinity)) Lterm = lh.L;
-  else if (!hit) Lterm = envRadiance(ctx.env, d);
+  else if (!hit) Lterm = envRadiance(ctx.env, d, o);
   if (Lterm >= 0) {
     if (firstRefl && ctx.contrib) ctx.contrib[firstRefl] = (ctx.contrib[firstRefl] ?? 0) + lum(thr) * Lterm;
     L.fill(Lterm);
@@ -298,6 +308,7 @@ function faceKey(hit) {
 export function renderTile(sceneCache, job) {
   const scene = sceneCache.scene;
   const cb = cameraBasis(job.camera);
+  const env = gridPanel(job.env, cb, job.camera, sceneCache);
   const aspect = job.width / job.height;
   const rgb = new Float32Array(job.w * job.h * 3), Y = new Float32Array(job.w * job.h);
   const contrib = {};
@@ -315,7 +326,7 @@ export function renderTile(sceneCache, job) {
     const k = j * job.w + i;
     if (job.exactSpectral) {
       // 正確モード: 1 サンプル 1 波長(分散による光路の違いもサンプルごとに厳密)
-      const ctx = { scene, env: job.env, lights: job.lights, rand, contrib: pc, suppressInternal: !!job.suppressInternal };
+      const ctx = { scene, env, lights: job.lights, rand, contrib: pc, suppressInternal: !!job.suppressInternal };
       const L = radiance(ctx, ray.o, ray.d, lam, 0, null, 1);
       const yb = spectralToY(lam, 1);
       for (const key in pc) contrib[key] = (contrib[key] ?? 0) + pc[key] * yb;
@@ -325,7 +336,7 @@ export function renderTile(sceneCache, job) {
     } else {
       // まとめモード(既定): 経路は 1 本、反射率は 16 波長ぶん。経路の波長はパスごとに巡回(分散は平均として入る)
       const lamG = job.pass === 0 ? 550 : lam;
-      const ctx = { scene, env: job.env, lights: job.lights, rand, contrib: pc, suppressInternal: !!job.suppressInternal, lamG };
+      const ctx = { scene, env, lights: job.lights, rand, contrib: pc, suppressInternal: !!job.suppressInternal, lamG };
       const L = radianceV(ctx, ray.o, ray.d, 0, null, BUF_T[0].fill(1));
       let r = 0, g = 0, bl = 0, yy = 0;
       for (let b = 0; b < NB; b++) { r += RGBW[b][0] * L[b]; g += RGBW[b][1] * L[b]; bl += RGBW[b][2] * L[b]; yy += YW[b] * L[b]; }
@@ -335,6 +346,19 @@ export function renderTile(sceneCache, job) {
     }
   }
   return { rgb, y: Y, contrib };
+}
+
+/**
+ * 格子パネル: 注視点からカメラと反対側へ、シーンの大きさの 1.5 倍の位置に、カメラと正対させて置く。
+ * 格子の間隔はシーンの大きさの約 1/6 を切りのよい値(1・2・5 × 10ⁿ mm)に丸める。
+ */
+export function gridPanel(env, cb, camera, cache) {
+  if ((env?.type ?? 'room') !== 'grid') return env;
+  const size = cache?.size ?? 20;
+  const raw = size / 6, p10 = 10 ** Math.floor(Math.log10(raw));
+  const spacing = [1, 2, 5, 10].map((k) => k * p10).find((v) => v >= raw * 0.75) ?? raw;
+  const p = [camera.target[0] + cb.fwd[0] * size * 1.5, camera.target[1] + cb.fwd[1] * size * 1.5, camera.target[2] + cb.fwd[2] * size * 1.5];
+  return { ...env, plane: { p, n: [-cb.fwd[0], -cb.fwd[1], -cb.fwd[2]], u: cb.right, v: cb.up, spacing, halfWidth: 0.045 } };
 }
 
 /** 部品の配列から描画用キャッシュを作る(Worker ごとに 1 回) */
