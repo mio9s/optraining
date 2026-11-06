@@ -87,3 +87,27 @@ test('one STL with two cemented lenses (shared face, non-manifold edges) splits 
   assert.equal(zs[0][1] > 3 && zs[0][1] < 4.01, true);
   assert.equal(zs[1][0] > 3, true);
 });
+
+test('zero-volume CAD fragments are dropped with a warning, the real body kept', () => {
+  const box = boxTris(0, 10, 0, 10, 0, 2);
+  const sliver = Float32Array.from([3, 3, 1, 3.1, 3, 1, 3, 3.1, 1]); // 1 枚の面(体積 0、開いた立体)
+  const all = new Float32Array(box.length + sliver.length); all.set(box); all.set(sliver, box.length);
+  const r = importSTL(toBinarySTL(all));
+  assert.equal(r.bodies.length, 1);
+  assert.equal(r.bodies[0].open, 0);
+  assert.ok(r.warnings.some((w) => w.includes('微小な断片')));
+});
+
+test('CAD ↔ scene coordinates are inverse for every axis / flip, and name the perpendicular CAD axes', async () => {
+  const { cadToScene, sceneToCad, perpAxes } = await import('../src/appearance/mesh.js');
+  for (const axis of ['x', 'y', 'z']) for (const flip of [false, true]) {
+    const f = { axis, flip, scale: 25.4 }, p = [1.5, -2, 3.25];
+    const q = cadToScene(p, f);
+    sceneToCad(q, f).forEach((v, k) => assert.ok(Math.abs(v - p[k]) < 1e-12));
+    // シーンの z は光軸にした図面の軸
+    const iz = { x: 0, y: 1, z: 2 }[axis];
+    assert.ok(Math.abs(Math.abs(q[2]) - Math.abs(p[iz]) * 25.4) < 1e-9);
+    const [a, b] = perpAxes(axis), ia = 'XYZ'.indexOf(a), ib = 'XYZ'.indexOf(b);
+    assert.ok(Math.abs(Math.abs(q[0]) - Math.abs(p[ia]) * 25.4) < 1e-9 && Math.abs(Math.abs(q[1]) - Math.abs(p[ib]) * 25.4) < 1e-9);
+  }
+});

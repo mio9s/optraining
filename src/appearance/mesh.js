@@ -187,23 +187,53 @@ export function buildMeshAccel({ V, F }, { offset = [0, 0, 0], creaseDeg = 30 } 
   const P = new Float64Array(V.length);
   for (let i = 0; i < V.length; i += 3) { P[i] = V[i] + offset[0]; P[i + 1] = V[i + 1] + offset[1]; P[i + 2] = V[i + 2] + offset[2]; }
   const FN = new Float64Array(nT * 3); // 面法線(単位、外向き = 巻き方向)
+  const AR = new Float64Array(nT); // 三角形の面積
   for (let t = 0; t < nT; t++) {
     const a = F[t * 3] * 3, b = F[t * 3 + 1] * 3, c = F[t * 3 + 2] * 3;
     const ux = P[b] - P[a], uy = P[b + 1] - P[a + 1], uz = P[b + 2] - P[a + 2], vx = P[c] - P[a], vy = P[c + 1] - P[a + 1], vz = P[c + 2] - P[a + 2];
     let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
     const L = Math.hypot(nx, ny, nz) || 1;
     FN[t * 3] = nx / L; FN[t * 3 + 1] = ny / L; FN[t * 3 + 2] = nz / L;
+    AR[t] = L / 2;
   }
   // 頂点ごとに接する面の一覧 → 角ごとの滑らかな法線
   const vf = Array.from({ length: V.length / 3 }, () => []);
   for (let t = 0; t < nT; t++) for (let k = 0; k < 3; k++) vf[F[t * 3 + k]].push(t);
   const cosC = Math.cos((creaseDeg * Math.PI) / 180);
+  // 平面の領域: 辺でつながり法線がほぼ同じ(0.01° 以内)三角形が 3 枚以上 → 法線を補間せず面の法線そのものを使う
+  // (CAD の平面。回転体の帯のような 2 枚組の台形は曲面の一部なので補間する)
+  const flat = new Uint8Array(nT);
+  {
+    const cosP = Math.cos((0.01 * Math.PI) / 180), owner = new Map(), adj = Array.from({ length: nT }, () => []);
+    for (let t = 0; t < nT; t++) for (let k = 0; k < 3; k++) {
+      const a = F[t * 3 + k], b = F[t * 3 + ((k + 1) % 3)], key = a < b ? `${a},${b}` : `${b},${a}`;
+      const o = owner.get(key);
+      if (o === undefined) owner.set(key, t); else { adj[t].push(o); adj[o].push(t); }
+    }
+    const reg = new Int32Array(nT).fill(-1);
+    for (let t0 = 0; t0 < nT; t0++) {
+      if (reg[t0] >= 0) continue;
+      const members = [t0], st = [t0]; reg[t0] = t0;
+      while (st.length) {
+        const t = st.pop();
+        for (const u of adj[t]) {
+          if (reg[u] >= 0) continue;
+          if (FN[t * 3] * FN[u * 3] + FN[t * 3 + 1] * FN[u * 3 + 1] + FN[t * 3 + 2] * FN[u * 3 + 2] < cosP) continue;
+          reg[u] = t0; members.push(u); st.push(u);
+        }
+      }
+      if (members.length >= 3) for (const t of members) flat[t] = 1;
+    }
+  }
   const CN = new Float64Array(nT * 9);
   for (let t = 0; t < nT; t++) for (let k = 0; k < 3; k++) {
+    if (flat[t]) { CN[t * 9 + k * 3] = FN[t * 3]; CN[t * 9 + k * 3 + 1] = FN[t * 3 + 1]; CN[t * 9 + k * 3 + 2] = FN[t * 3 + 2]; continue; }
     let sx = 0, sy = 0, sz = 0;
     for (const u of vf[F[t * 3 + k]]) {
       const d = FN[t * 3] * FN[u * 3] + FN[t * 3 + 1] * FN[u * 3 + 1] + FN[t * 3 + 2] * FN[u * 3 + 2];
-      if (d >= cosC) { sx += FN[u * 3]; sy += FN[u * 3 + 1]; sz += FN[u * 3 + 2]; }
+      // 面積で重み付け: CAD は平面を少数の大きな三角形で書き出すので、ゆるい曲面(フィレット)の細かい三角形と頂点を
+      // 共有しても、平面の法線はほとんど傾かない(傾くと平面全体で光線が曲がってしまう)
+      if (d >= cosC) { sx += FN[u * 3] * AR[u]; sy += FN[u * 3 + 1] * AR[u]; sz += FN[u * 3 + 2] * AR[u]; }
     }
     const L = Math.hypot(sx, sy, sz) || 1;
     CN[t * 9 + k * 3] = sx / L; CN[t * 9 + k * 3 + 1] = sy / L; CN[t * 9 + k * 3 + 2] = sz / L;
@@ -381,7 +411,22 @@ export function importSTL(buf, opts = {}) {
   const bodies = [], warnings = [];
   for (const s of solids) {
     const welded = weld(s.tris, opts.weldTol ?? 1e-5 * Math.max(1, opts.scale ?? 1));
-    const parts = opts.split === false ? [welded] : splitComponents(welded);
+    let parts = opts.split === false ? [welded] : splitComponents(welded);
+    // CAD の書き出しで残る微小な断片(体積がほぼ 0 の薄い面のかけら)は除く
+    if (parts.length > 1) {
+      // 開いた面の「体積」は原点の取り方で変わるので、開いていて全体に比べてごく小さいものも断片とみなす
+      const vols = parts.map((m) => Math.abs(signedVolume(m)));
+      const diag = parts.map((m) => { const b = meshBounds(m.V); return Math.hypot(b.hi[0] - b.lo[0], b.hi[1] - b.lo[1], b.hi[2] - b.lo[2]); });
+      const vmax = Math.max(...vols), dmax = Math.max(...diag);
+      const frag = parts.map((m, i) => vols[i] <= vmax * 1e-6 || (openEdges(m) > 0 && diag[i] < dmax * 0.05));
+      const keep = parts.filter((_, i) => !frag[i]);
+      const dropped = parts.length - keep.length;
+      if (dropped && keep.length) {
+        const nt = parts.filter((_, i) => frag[i]).reduce((a, m) => a + m.F.length / 3, 0);
+        warnings.push(`${s.name}: 体積がほぼ 0 の微小な断片 ${dropped} 個(三角形 ${nt} 枚)を除きました`);
+        parts = keep;
+      }
+    }
     parts.forEach((m, i) => {
       const V = transformVertices(m.V, opts);
       const vol = signedVolume({ V, F: m.F });
@@ -392,4 +437,18 @@ export function importSTL(buf, opts = {}) {
     });
   }
   return { bodies, warnings };
+}
+
+// ---------- 図面座標とシーン座標 ----------
+/** 光軸にした図面の軸に対し、シーンの x・y になる図面の軸の名前 */
+export const perpAxes = (axis) => (axis === 'x' ? ['Y', 'Z'] : axis === 'y' ? ['Z', 'X'] : ['X', 'Y']);
+/** 図面の点 → シーンの点(平行移動の前) */
+export const cadToScene = (p, frame) => Array.from(transformVertices(p, { axis: frame.axis, flip: frame.flip, scale: frame.scale }));
+/** シーンの点(平行移動の前) → 図面の点 */
+export function sceneToCad(q, { axis = 'z', flip = false, scale = 1 }) {
+  let [x, y, z] = q.map((v) => v / scale);
+  if (flip) { x = -x; z = -z; }
+  if (axis === 'x') [x, y, z] = [z, x, y];
+  else if (axis === 'y') [x, y, z] = [y, z, x];
+  return [x, y, z];
 }

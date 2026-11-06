@@ -111,8 +111,20 @@
       <label class="file" title="SVG・DXF・CSV(r, z の点列)は断面を回転させて部品にします。STL は立体をそのまま(回転させずに)部品にします">取り込み(SVG / DXF / CSV / STL)…<input type="file" id="ap-file" accept=".svg,.dxf,.csv,.txt,.stl,image/svg+xml,model/stl"></label>
     </div>
     <p class="warn" id="ap-warn"></p>
+    <div class="row" id="ap-stl-tools">
+      <button type="button" id="ap-move-stl" title="取り込んだ STL の部品をまとめて動かし、光軸(x = y = 0)が図面のどこを通るかを決めます">STL の位置(光軸の位置)…</button>
+      <button type="button" id="ap-to-lens" title="光軸上にある部品の面を球面に当てはめて、結像・収差モードのレンズデータを作ります">レンズデータに変換(結像モードへ)…</button>
+    </div>
     <div id="ap-parts"></div>
     <p class="errors" id="ap-errors"></p>
+    <fieldset class="ap-cavity">
+      <legend>閉じた空洞(部品に囲まれた隙間)の媒質</legend>
+      <div class="ap-row">
+        <select id="ap-cav-mat" aria-label="空洞の媒質"></select><span id="ap-cav-model"></span>
+        <label class="field" title="注入口のように外とつながる細い通路を、この幅まではふさがっているとみなします(0 = 完全に閉じた空洞だけ)。広くしすぎると、外とつながった細い空気の隙間まで液体になります"><span>細い通路をふさぐ幅</span><input type="text" id="ap-cav-seal" class="num"><small>mm</small></label>
+      </div>
+      <p class="note" id="ap-cav-info"></p>
+    </fieldset>
     <h3 class="sub">断面図(全部品)</h3>
     <canvas id="ap-section" aria-label="部品の断面図"></canvas>
     <p class="hint">色 = 材質(部品一覧の左端の色と同じ)、灰 = 不透明。回転体は上半分を光軸まわりに回転させて立体にします。STL の部品は y = 0 の平面での切り口を線で表示します。</p>
@@ -129,6 +141,7 @@
     </div>
     <div class="ap-view">
       <canvas id="ap-canvas" aria-label="レンズの外観" tabindex="0"></canvas>
+      <canvas id="ap-overlay" class="ap-overlay" aria-hidden="true"></canvas>
       <canvas id="ap-axes" class="ap-axes" aria-hidden="true" title="座標軸: Z = 光軸(光の進む向き)"></canvas>
     </div>
     <div class="ap-statusbar"><span id="ap-status">準備中…</span><span class="muted">ドラッグで回転、ホイールで拡大縮小</span></div>
@@ -138,6 +151,7 @@
       <label class="field inline" title="注視点からカメラまでの距離"><span>距離</span><input type="text" id="ap-cam-distance" class="num"><small>mm</small></label>
       <label class="field inline" title="カメラの画角"><span>画角</span><input type="text" id="ap-cam-fov" class="num"><small>°</small></label>
       <button type="button" id="ap-cam-reset" class="secondary">視点を戻す</button>
+      <label class="check" title="光軸(x = y = 0 の直線、オレンジの破線)と原点を画像に重ねて表示します"><input type="checkbox" id="ap-show-axis"> 光軸を表示</label>
       <button type="button" id="ap-sheet">角度一覧…</button>
     </div>
     <div class="imgctl">

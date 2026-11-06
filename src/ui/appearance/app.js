@@ -2,6 +2,8 @@
 import uPlot from 'uplot';
 import { partsFromSystem, validateScene, OPAQUE, newId, placedProfile, partBounds, isMesh, meshData } from '../../appearance/scene.js';
 import { openStlImport, sliceXZ } from './stl-import.js';
+import { perpAxes, sceneToCad, cadToScene } from '../../appearance/mesh.js';
+import { systemFromParts, matName } from '../../appearance/to-system.js';
 import { importProfiles } from '../../appearance/import.js';
 import { tessellate, bounds, segmentEvaluator } from '../../appearance/profile.js';
 import { COATINGS } from '../../appearance/thinfilm.js';
@@ -25,7 +27,7 @@ const fmt = (v, d = 3) => (Number.isFinite(v) ? String(+v.toFixed(d)) : '—');
 const PRESETS = listPresets();
 const RES = { s: [320, 240], m: [640, 480], l: [960, 720] };
 
-export const defaultAppearance = () => ({ parts: null, env: 'room', lights: [], camera: null, res: 'm', threshold: 2, quality: 'standard', autoParts: { iris: true, barrel: false } });
+export const defaultAppearance = () => ({ parts: null, env: 'room', lights: [], camera: null, res: 'm', threshold: 2, quality: 'standard', autoParts: { iris: true, barrel: false }, cavity: { material: { type: 'air' }, seal: 0 }, showAxis: true });
 
 /** 面の名前(前面/後面/コバ/段) */
 export function faceLabel(part, seg) {
@@ -39,7 +41,7 @@ export function faceLabel(part, seg) {
   return n[0] < -0.7 ? '内周' : '斜面';
 }
 
-export function initAppearance({ getSystem, getState, setState }) {
+export function initAppearance({ getSystem, getState, setState, onLoadSystem }) {
   const st = getState();
   const pool = createPool();
   let view = null, plot = null;
@@ -53,6 +55,19 @@ export function initAppearance({ getSystem, getState, setState }) {
     st.parts = r.parts;
     $('ap-warn').textContent = r.warnings.join(' / ');
     st.camera = defaultCamera(st.parts);
+  }
+  /** 描画・解析に渡す部品: 表示中の部品 + 閉じた空洞の媒質(空気以外のとき) */
+  function cavityPart() {
+    const c = st.cavity;
+    return c?.material && c.material.type !== 'air' ? { id: 'cavity', kind: 'cavity', material: c.material, seal: c.seal ?? 0 } : null;
+  }
+  function sceneParts() { const cp = cavityPart(); return [...st.parts.filter((p) => p.visible !== false), ...(cp ? [cp] : [])]; }
+  let lastScene = null;
+  /** 最後に取り込んだ STL の座標系(なければ部品の値から) */
+  function lastFrame() {
+    if (st.stlFrame) return st.stlFrame;
+    const p = [...st.parts].reverse().find(isMesh);
+    return p ? { axis: 'z', flip: false, scale: 1, ...(p.frame ?? {}), offset: [...(p.offset ?? [0, 0, 0])] } : null;
   }
   /** 既存部品の最も後ろの z(なければ −∞) */
   function zEndOf(parts) {
@@ -177,7 +192,7 @@ export function initAppearance({ getSystem, getState, setState }) {
     });
     const s = Math.min((W - 20) / Math.max(z1 - z0, 1e-3), (H - 20) / (2 * rMax));
     const X = (z) => 10 + (z - z0) * s + ((W - 20) - (z1 - z0) * s) / 2, Y = (r) => H / 2 - r * s;
-    const pal = materialPalette(st.parts.map((p) => p.material));
+    const pal = materialPalette([...st.parts.map((p) => p.material), ...(cavityPart() ? [st.cavity.material] : [])]);
     vis.forEach((p, i) => {
       if (ed[i].cut) {
         ctx.strokeStyle = p.material.type === 'opaque' ? 'rgba(60,60,60,0.9)' : pal.get(materialKey(p.material))?.solid ?? '#2b6cb0';
@@ -194,6 +209,16 @@ export function initAppearance({ getSystem, getState, setState }) {
         ctx.fill(); ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.lineWidth = 0.8; ctx.stroke();
       }
     });
+    // 閉じた空洞の媒質(y = 0 の切り口の格子)
+    const cav = lastScene?.cavity;
+    if (cav?.entry && cav.grid) {
+      const { G, o, nx, ny, nz } = cav.grid, j = Math.floor((0 - o[1]) / cav.cell);
+      if (j >= 0 && j < ny) {
+        ctx.fillStyle = pal.get(materialKey(cav.entry.part.material))?.fill(0.55) ?? 'rgba(230,150,40,0.5)';
+        const wpx = Math.max(1, cav.cell * s);
+        for (let k = 0; k < nz; k++) for (let i = 0; i < nx; i++) if (G[(k * ny + j) * nx + i] === 2) ctx.fillRect(X(o[2] + k * cav.cell), Y(o[0] + (i + 1) * cav.cell), wpx + 0.5, wpx + 0.5);
+      }
+    }
     ctx.strokeStyle = '#888'; ctx.setLineDash([4, 3]); ctx.beginPath(); ctx.moveTo(0, H / 2); ctx.lineTo(W, H / 2); ctx.stroke(); ctx.setLineDash([]);
   }
 
@@ -205,9 +230,11 @@ export function initAppearance({ getSystem, getState, setState }) {
     if (ext === 'stl') {
       const buf = await f.arrayBuffer();
       openStlImport($('ap-dialog'), f.name, buf, {
-        zEnd: zEndOf(st.parts), newId,
+        zEnd: zEndOf(st.parts), newId, frame: st.parts.some(isMesh) ? lastFrame() : null,
         onAdd: (bodies, o) => {
-          for (const b of bodies) st.parts.push({ id: newId(), name: b.name, kind: 'mesh', mesh: b.mesh, offset: b.offset, creaseDeg: o.creaseDeg, contactTol: o.contactTol, material: { type: 'preset', name: 'N-BK7' }, coatings: {}, source: 'stl', visible: true });
+          const { offset, ...frame } = o.frame;
+          for (const b of bodies) st.parts.push({ id: newId(), name: b.name, kind: 'mesh', mesh: b.mesh, offset: [...offset], frame, creaseDeg: o.creaseDeg, contactTol: o.contactTol, material: { type: 'preset', name: 'N-BK7' }, coatings: {}, source: 'stl', visible: true });
+          st.stlFrame = o.frame;
           changed(true, true);
         },
       });
@@ -326,7 +353,7 @@ export function initAppearance({ getSystem, getState, setState }) {
   // ---------- 描画 ----------
   function renderState() {
     const [w, h0] = RES[st.res] ?? RES.m;
-    return { parts: st.parts.filter((p) => p.visible !== false), camera: st.camera, env: { type: st.env }, lights: worldLights(), width: w, height: h0, exactSpectral: st.quality === 'exact' };
+    return { parts: sceneParts(), camera: st.camera, env: { type: st.env }, lights: worldLights(), width: w, height: h0, exactSpectral: st.quality === 'exact' };
   }
   function syncCameraInputs() {
     for (const k of ['azimuth', 'elevation', 'distance', 'fov']) $(`ap-cam-${k}`).value = fmt(st.camera[k], k === 'distance' ? 2 : 1);
@@ -369,8 +396,152 @@ export function initAppearance({ getSystem, getState, setState }) {
     ctx.fillText('Z = 光軸', o, css - 9);
   }
 
+  /** 画像に光軸(x = y = 0)と原点を重ねる */
+  function drawOverlay() {
+    const c = $('ap-overlay');
+    if (!c || !st.camera) return;
+    const W = c.clientWidth, H = c.clientHeight, dpr = devicePixelRatio || 1;
+    c.width = W * dpr; c.height = H * dpr;
+    const ctx = c.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
+    if (!st.showAxis || !W) return;
+    const cb = cameraBasis(st.camera), aspect = W / H;
+    const proj = (p) => {
+      const v = [p[0] - cb.pos[0], p[1] - cb.pos[1], p[2] - cb.pos[2]];
+      const zc = v[0] * cb.fwd[0] + v[1] * cb.fwd[1] + v[2] * cb.fwd[2];
+      if (zc <= 1e-6) return null;
+      const u = (v[0] * cb.right[0] + v[1] * cb.right[1] + v[2] * cb.right[2]) / (zc * cb.tanHalf * aspect), w = (v[0] * cb.up[0] + v[1] * cb.up[1] + v[2] * cb.up[2]) / (zc * cb.tanHalf);
+      return [((u + 1) / 2) * W, ((1 - w) / 2) * H];
+    };
+    let z0 = Infinity, z1 = -Infinity, size = 1;
+    for (const p of st.parts) { if (p.visible === false) continue; try { const b = partBounds(p); z0 = Math.min(z0, b.zMin); z1 = Math.max(z1, b.zMax); size = Math.max(size, b.rMax); } catch { /* */ } }
+    if (!Number.isFinite(z0)) { z0 = 0; z1 = 1; }
+    const ext = Math.max(z1 - z0, size) * 0.6;
+    // 光軸を細かく区切って投影(カメラの後ろは描かない)
+    ctx.strokeStyle = 'rgba(255,140,0,0.95)'; ctx.lineWidth = 1.5; ctx.setLineDash([6, 4]);
+    ctx.beginPath();
+    let pen = false, last = null;
+    for (let k = 0; k <= 200; k++) {
+      const q = proj([0, 0, z0 - ext + ((z1 - z0 + 2 * ext) * k) / 200]);
+      if (!q) { pen = false; continue; }
+      if (pen) ctx.lineTo(q[0], q[1]); else ctx.moveTo(q[0], q[1]);
+      pen = true; last = q;
+    }
+    ctx.stroke(); ctx.setLineDash([]);
+    ctx.font = '12px system-ui, sans-serif'; ctx.fillStyle = 'rgba(255,140,0,1)'; ctx.strokeStyle = 'rgba(0,0,0,0.7)'; ctx.lineWidth = 3;
+    if (last) { ctx.strokeText('光軸 +z', last[0] + 4, last[1] - 4); ctx.fillText('光軸 +z', last[0] + 4, last[1] - 4); }
+    const o = proj([0, 0, 0]);
+    if (o) { ctx.beginPath(); ctx.arc(o[0], o[1], 4, 0, 2 * Math.PI); ctx.fill(); ctx.strokeText('原点', o[0] + 6, o[1] + 14); ctx.fillText('原点', o[0] + 6, o[1] + 14); }
+  }
+
+  // ---------- 閉じた空洞の媒質 ----------
+  function cavityControls() {
+    const sel = $('ap-cav-mat');
+    sel.replaceChildren(h('option', { value: 'air' }, '空気(外と同じ)'), h('optgroup', { label: 'ガラス・樹脂' }, ...PRESETS.map((x) => h('option', { value: `preset:${x.name}` }, x.name))), h('option', { value: 'model' }, '液体・樹脂など(nd・νd を指定)'));
+    const m = st.cavity.material;
+    sel.value = m.type === 'preset' ? `preset:${m.name}` : m.type;
+    const box = $('ap-cav-model');
+    box.replaceChildren();
+    if (m.type === 'model') {
+      for (const [k, label] of [['nd', 'nd'], ['vd', 'νd']]) {
+        const inp = h('input', { type: 'text', value: String(m[k]), class: 'num', 'aria-label': `空洞の媒質の ${label}` });
+        inp.addEventListener('change', () => { const v = parseNumber(inp.value); if (v > 0) { m[k] = v; changed(true); } else inp.classList.add('invalid'); });
+        box.append(h('label', { class: 'field' }, h('span', {}, label), inp));
+      }
+    }
+    $('ap-cav-seal').value = String(st.cavity.seal ?? 0);
+    $('ap-cav-seal').disabled = m.type === 'air';
+  }
+  function showCavityInfo(scene) {
+    const el = $('ap-cav-info');
+    if (!el) return;
+    if (!cavityPart()) { el.textContent = '空洞は周囲と同じ空気として扱っています。液体を封入したレンズなどは媒質を選んでください。'; el.classList.remove('warn'); return; }
+    const c = scene.cavity;
+    if (c?.entry) { el.textContent = `閉じた空洞を見つけました: 体積 ${fmt(c.volume, 1)} mm³(判定の格子 ${fmt(c.cell, 3)} mm)。断面図に媒質の色で表示しています。`; el.classList.remove('warn'); }
+    else { el.textContent = '閉じた空洞が見つかりません。注入口などの細い通路で外とつながっている場合は「細い通路をふさぐ幅」をその通路の幅より少し大きくしてください。'; el.classList.add('warn'); }
+  }
+
+  // ---------- STL の位置(光軸がどこを通るか) ----------
+  function openMoveStl() {
+    const dlg = $('ap-dialog');
+    dlg.replaceChildren();
+    const groups = new Map();
+    for (const p of st.parts) if (isMesh(p)) { const f = { axis: 'z', flip: false, scale: 1, ...(p.frame ?? {}) }, k = JSON.stringify(f); if (!groups.has(k)) groups.set(k, { frame: f, parts: [] }); groups.get(k).parts.push(p); }
+    const blocks = [...groups.values()].map((g) => {
+      const ref = g.parts[0], off = ref.offset ?? [0, 0, 0];
+      const cur = sceneToCad([-off[0], -off[1], 0], g.frame);
+      const [a, b] = perpAxes(g.frame.axis), ia = 'XYZ'.indexOf(a), ib = 'XYZ'.indexOf(b);
+      const ua = h('input', { type: 'text', class: 'num', value: fmt(cur[ia], 4) }), ub = h('input', { type: 'text', class: 'num', value: fmt(cur[ib], 4) }), dz = h('input', { type: 'text', class: 'num', value: '0' });
+      // 外接箱の中心
+      const lo = [Infinity, Infinity], hi = [-Infinity, -Infinity];
+      for (const p of g.parts) { const bb = partBounds(p); for (let k = 0; k < 2; k++) { lo[k] = Math.min(lo[k], bb.lo[k]); hi[k] = Math.max(hi[k], bb.hi[k]); } }
+      const cen = sceneToCad([(lo[0] + hi[0]) / 2 - off[0], (lo[1] + hi[1]) / 2 - off[1], 0], g.frame);
+      return { g, ia, ib, ua, ub, dz, row: h('div', { class: 'ap-move-group' },
+        h('p', {}, h('b', {}, g.parts.map((p) => p.name).join('、')), h('small', { class: 'muted' }, `(図面の ${g.frame.axis.toUpperCase()} 軸 = 光軸${g.frame.flip ? '、反転' : ''}、1 単位 = ${g.frame.scale} mm)`)),
+        h('div', { class: 'ap-row' }, h('span', {}, '光軸が通る図面上の点:'), h('label', { class: 'field' }, h('span', {}, `${a} =`), ua), h('label', { class: 'field' }, h('span', {}, `${b} =`), ub),
+          h('button', { type: 'button', class: 'secondary', onclick: () => { ua.value = fmt(cen[ia], 4); ub.value = fmt(cen[ib], 4); } }, '外接箱の中心')),
+        h('div', { class: 'ap-row' }, h('label', { class: 'field', title: '光軸方向(z)にまとめてずらす量' }, h('span', {}, '光軸方向に動かす Δz'), dz, h('small', {}, 'mm')))) };
+    });
+    dlg.append(h('h2', {}, 'STL の位置(光軸の位置)'),
+      h('p', { class: 'note' }, '同じ座標系で取り込んだ STL の部品をまとめて動かします(部品どうしの位置関係は変わりません)。光軸はシーンの x = y = 0 の直線で、光は +z へ進みます。部品ごとに動かすときは部品一覧の Δx・Δy・Δz を使います。画像の上のオレンジの破線が今の光軸です。'),
+      ...blocks.map((b) => b.row),
+      h('div', { class: 'row' },
+        h('button', { type: 'button', class: 'primary', onclick: () => {
+          for (const b of blocks) {
+            const u = parseNumber(b.ua.value), v = parseNumber(b.ub.value), dz = parseNumber(b.dz.value);
+            if (![u, v, dz].every(Number.isFinite)) { [b.ua, b.ub, b.dz].forEach((e) => e.classList.toggle('invalid', !Number.isFinite(parseNumber(e.value)))); return; }
+            const P = [0, 0, 0]; P[b.ia] = u; P[b.ib] = v;
+            const q = cadToScene(P, b.g.frame), ref = b.g.parts[0].offset ?? [0, 0, 0];
+            const d = [-q[0] - ref[0], -q[1] - ref[1], dz];
+            for (const p of b.g.parts) p.offset = (p.offset ?? [0, 0, 0]).map((x, k) => +(x + d[k]).toFixed(6));
+            if (st.stlFrame && JSON.stringify({ axis: st.stlFrame.axis, flip: st.stlFrame.flip, scale: st.stlFrame.scale }) === JSON.stringify({ axis: b.g.frame.axis, flip: b.g.frame.flip, scale: b.g.frame.scale })) st.stlFrame = { ...st.stlFrame, offset: st.stlFrame.offset.map((x, k) => +(x + d[k]).toFixed(6)) };
+          }
+          dlg.close(); changed(true, true);
+        } }, '動かす'),
+        h('button', { type: 'button', class: 'secondary', onclick: () => dlg.close() }, 'キャンセル')));
+    dlg.showModal();
+  }
+
+  // ---------- レンズデータへの変換 ----------
+  function openToLens() {
+    const dlg = $('ap-dialog');
+    dlg.replaceChildren();
+    const tolIn = h('input', { type: 'text', class: 'num', value: '2' });
+    const out = h('div');
+    const go = h('button', { type: 'button', class: 'primary', disabled: true }, '結像モードで開く');
+    let res = null;
+    const run = () => {
+      out.replaceChildren(h('p', { class: 'note' }, '計算中…'));
+      go.disabled = true;
+      setTimeout(() => {
+        const tol = parseNumber(tolIn.value);
+        try { res = systemFromParts(sceneParts(), getSystem(), { tol: (tol > 0 ? tol : 2) / 1000 }); } catch (e) { res = { ok: false, message: e.message }; }
+        out.replaceChildren();
+        if (!res.ok) { out.append(h('p', { class: 'warn' }, res.message)); return; }
+        const S = res.system.surfaces.filter((x) => x.kind === 'surface');
+        out.append(
+          h('p', {}, `光軸上の面 ${res.rows.length} 個、有効径 ${fmt(2 * res.aperture, 3)} mm${res.stopReason ? `(${res.stopReason})` : ''}`),
+          h('table', { class: 'ap-conv' }, h('thead', {}, h('tr', {}, ...['面', 'z [mm]', '曲率半径 R [mm]', '次の面まで [mm]', '球面からのずれ', '界面'].map((t) => h('th', {}, t)))),
+            h('tbody', {}, ...res.rows.map((r, i) => h('tr', {}, h('td', {}, String(i + 1)), h('td', {}, fmt(r.z, 4)), h('td', {}, Number.isFinite(r.R) ? fmt(r.R, 3) : '∞(平面)'),
+              h('td', {}, i < res.rows.length - 1 ? fmt(S[i].thickness, 4) : `${fmt(S[i].thickness, 3)}(像まで)`), h('td', {}, `${fmt(r.rms * 1000, 2)} µm`), h('td', {}, `${r.nameBefore} → ${r.nameAfter}(${matName(r.after)})`))))),
+          ...res.warnings.map((w) => h('p', { class: 'warn' }, w)),
+          res.rows.every((r) => !Number.isFinite(r.R)) ? h('p', { class: 'note' }, 'すべて平面です(屈折力 0 の平行平板)。無限遠の物体は結像しません。') : null);
+        go.disabled = false;
+      }, 30);
+    };
+    tolIn.addEventListener('change', run);
+    go.addEventListener('click', () => { if (!res?.ok) return; dlg.close(); onLoadSystem?.(res.system); });
+    dlg.append(h('h2', {}, 'レンズデータに変換(結像モードへ)'),
+      h('p', { class: 'note' }, '光軸(x = y = 0)に沿って面を順に拾い、光軸のまわりの点で各面を球面に当てはめます。有効径は「全方位で同じ面の並びを通り、各面が球面・回転対称とみなせる」最大の半径です。物体・スクリーン・波長は今のレンズデータから引き継ぎ、最後の面から像までは近軸の像位置にします。結像モードのレンズデータは置き換わります(必要なら先に「保存」してください)。'),
+      h('label', { class: 'field', title: 'この値より球面・回転対称からずれたところで有効径を打ち切ります' }, h('span', {}, '球面とみなす許容差'), tolIn, h('small', {}, 'µm')),
+      out,
+      h('div', { class: 'row' }, go, h('button', { type: 'button', class: 'secondary', onclick: () => dlg.close() }, 'キャンセル')));
+    dlg.showModal();
+    run();
+  }
+
   /** 視点・照明だけの変更(部品リストは作り直さない) */
-  function viewChanged() { syncCameraInputs(); drawAxes(); setState(st); startRender(); }
+  function viewChanged() { syncCameraInputs(); drawAxes(); drawOverlay(); setState(st); startRender(); }
   function changed(geometry, refit = false) {
     if (refit) st.camera = defaultCamera(st.parts);
     renderParts(); syncCameraInputs(); setState(st);
@@ -381,7 +552,8 @@ export function initAppearance({ getSystem, getState, setState }) {
   // ---------- 数値: 反射率 ----------
   function faceList() {
     const out = [];
-    const scene = buildTraceScene(st.parts);
+    const scene = buildTraceScene(sceneParts());
+    lastScene = scene; showCavityInfo(scene);
     st.parts.forEach((p) => {
       if (p.visible === false || p.material.type === 'opaque') return;
       if (isMesh(p)) { out.push({ part: p, seg: 0, label: `${p.name} 表面(STL、空気との界面として表示)`, outside: { type: 'air' } }); return; }
@@ -402,6 +574,9 @@ export function initAppearance({ getSystem, getState, setState }) {
   function renderFaces() {
     const sel = $('ap-face');
     const list = faceList();
+    drawSection(); drawOverlay();
+    $('ap-stl-tools').hidden = false;
+    $('ap-move-stl').hidden = !st.parts.some(isMesh);
     sel.replaceChildren(...list.map((f, i) => h('option', { value: i }, f.label)));
     sel._list = list;
     plotReflectance();
@@ -451,7 +626,7 @@ export function initAppearance({ getSystem, getState, setState }) {
   // ---------- 数値: 寄与 ----------
   function names() {
     const byId = Object.fromEntries(st.parts.map((p) => [p.id, p]));
-    return (key) => key.split('|').map((k) => { const [id, seg] = k.split(':'); const p = byId[id]; return p ? `${p.name} ${faceLabel(p, +seg) ?? `面${+seg + 1}`}` : k; }).join(' / ');
+    return (key) => key.split('|').map((k) => { const [id, seg] = k.split(':'); if (id === 'cavity') return '空洞の媒質'; const p = byId[id]; return p ? `${p.name} ${faceLabel(p, +seg) ?? `面${+seg + 1}`}` : k; }).join(' / ');
   }
   function onFrame(buf) {
     const tot = buf.y.reduce((a, b) => a + b, 0);
@@ -550,6 +725,20 @@ export function initAppearance({ getSystem, getState, setState }) {
         st.parts.push(np); changed(true, true);
       });
     });
+    if (!st.cavity) st.cavity = { material: { type: 'air' }, seal: 0 };
+    cavityControls();
+    $('ap-cav-mat').addEventListener('change', () => {
+      const v = $('ap-cav-mat').value;
+      st.cavity.material = v === 'air' ? { type: 'air' } : v === 'model' ? { type: 'model', nd: 1.5, vd: 50 } : { type: 'preset', name: v.slice(7) };
+      if (v !== 'air' && !(st.cavity.seal > 0)) st.cavity.seal = 0;
+      cavityControls(); changed(true);
+    });
+    $('ap-cav-seal').addEventListener('change', () => { const v = parseNumber($('ap-cav-seal').value); if (v >= 0) { st.cavity.seal = v; changed(true); } else $('ap-cav-seal').classList.add('invalid'); });
+    $('ap-move-stl').addEventListener('click', openMoveStl);
+    $('ap-to-lens').addEventListener('click', openToLens);
+    if (st.showAxis === undefined) st.showAxis = true;
+    $('ap-show-axis').checked = st.showAxis;
+    $('ap-show-axis').addEventListener('change', () => { st.showAxis = $('ap-show-axis').checked; setState(st); drawOverlay(); });
     $('ap-add-point').addEventListener('click', () => addLight('point'));
     $('ap-add-rect').addEventListener('click', () => addLight('rect'));
     $('ap-clear-lights').addEventListener('click', () => { if (!st.lights.length) return; st.lights.splice(0); renderLights(); viewChanged(); });
@@ -580,13 +769,14 @@ export function initAppearance({ getSystem, getState, setState }) {
     $('ap-auto').addEventListener('change', () => view.setExposure(2 ** +$('ap-exposure').value, $('ap-auto').checked));
     view = createRenderView($('ap-canvas'), pool, {
       onProgress: (p, m, low) => { $('ap-status').textContent = low ? '回転中(粗い表示)…' : p === 0 ? '描画中…' : p < m ? `精細化中… ${p}/${m} パス(色は 1 パス目から正しく表示されます)` : `完了(${m} パス)`; },
-      onCamera: () => { syncCameraInputs(); drawAxes(); setState(st); },
+      onCamera: () => { syncCameraInputs(); drawAxes(); drawOverlay(); setState(st); },
       onLine, onFrame,
       onExposure: (ex) => { $('ap-exposure-out').textContent = `×${ex < 10 ? ex.toFixed(2) : ex.toPrecision(3)}`; },
       onError: (m) => { $('ap-status').textContent = `エラー: ${m}`; },
     });
     renderParts(); renderLights(); renderFaces(); syncCameraInputs(); drawAxes();
     new ResizeObserver(() => drawSection()).observe($('ap-section'));
+    new ResizeObserver(() => drawOverlay()).observe($('ap-canvas'));
   }
   let started = false;
   const sysSig = () => JSON.stringify(getSystem(), (k, v) => (v === Infinity ? 'inf' : v));
@@ -600,7 +790,7 @@ export function initAppearance({ getSystem, getState, setState }) {
       startRender(true);
     },
     markSynced() { st.sysSig = sysSig(); setState(st); },
-    reload() { st.sysSig = sysSig(); if (started) { if (!st.parts) regenerate(); if (!st.camera) st.camera = defaultCamera(st.parts); $('ap-env').value = st.env; $('ap-res').value = st.res; renderParts(); renderLights(); renderFaces(); syncCameraInputs(); drawAxes(); startRender(); } },
+    reload() { st.sysSig = sysSig(); if (started) { if (!st.parts) regenerate(); if (!st.camera) st.camera = defaultCamera(st.parts); $('ap-env').value = st.env; $('ap-res').value = st.res; if (!st.cavity) st.cavity = { material: { type: 'air' }, seal: 0 }; cavityControls(); $('ap-show-axis').checked = st.showAxis !== false; renderParts(); renderLights(); renderFaces(); syncCameraInputs(); drawAxes(); startRender(); } },
     state: () => st,
   };
 }

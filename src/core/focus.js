@@ -110,6 +110,8 @@ export function bestImagePlane(sys, opts = {}) {
   };
   // 探索範囲: 各波長の近軸像位置の前後
   const parax = W.map((l) => paraxialTrace(sys, l).imageZ - zk).filter(Number.isFinite);
+  // 像が最終面より手前(虚像)、または無限遠: スクリーンには結像しない(平行平板・発散系など)
+  if (!parax.length || Math.max(...parax) <= 1e-3) return { ok: false, message: '近軸の像が最終面より手前の虚像か無限遠にできるため、スクリーン上に結像しません(屈折力がほぼ 0 の平行平板や発散系)。物体を見る用途なら、像のずれは「焦点・屈折力」の数値で確認してください', curve: [], lastSurface: k, paraxialDistance: parax[0], currentDistance: S[k].thickness };
   let lo = Math.min(...parax), hi = Math.max(...parax);
   const span = Math.max(hi - lo, 0.05 * Math.abs((lo + hi) / 2), 1);
   lo -= span; hi += span;

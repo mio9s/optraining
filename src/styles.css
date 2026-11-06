@@ -223,6 +223,11 @@ body[data-mode=appearance] { --mode: var(--mode-appearance); }
 #ap-right label.field.inline { display: flex; width: 100%; } #ap-right label.field.inline span { white-space: nowrap; } #ap-right label.field.inline select { flex: 1; min-width: 0; }
 
 .ap-view { position: relative; }
+.ap-overlay { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; }
+.ap-cavity { border: 1px solid var(--line, #ccc); border-radius: 6px; padding: 6px 8px; margin: 8px 0; }
+.ap-cavity legend { font-size: 0.85em; font-weight: 600; padding: 0 4px; }
+.ap-conv td, .ap-conv th { padding: 2px 6px; text-align: right; white-space: nowrap; }
+.ap-conv td:last-child, .ap-conv th:last-child { text-align: left; white-space: normal; }
 .ap-axes { position: absolute; right: 8px; bottom: 8px; width: 108px; height: 108px; pointer-events: none; }
 
 /* 材料の色(断面図と表で共通) */

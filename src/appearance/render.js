@@ -177,11 +177,11 @@ function radiance(ctx, o, d, lam, depth, firstRefl, w, prev = null) {
   if (!hit) return term(envRadiance(ctx.env, d, o));
   const f = interfaceAt(ctx.scene, hit, d, lam / 1000);
   const P = hit.point;
-  const key = faceKey(hit);
+  const key = faceKey(hit, f);
   if (f.opaque) return shadeOpaque(ctx, f, P, d, lam, depth, firstRefl ?? key, w);
   const tf = thinFilm(f.nBefore, f.layers, f.nAfter, f.cosI, lam / 1000);
   // 比較用: 内部界面(部品どうしの接合面)の反射を消す(屈折はそのまま)
-  const internal = hit.hits.length > 1 && f.before && f.after;
+  const internal = !!(f.before && f.after); // 部品どうし(空洞の媒質を含む)の界面
   const R = ctx.suppressInternal && internal && f.cosI > 0 && tf.R < 1 ? 0 : tf.R, T = 1 - R;
   const rd = reflect(d, f.normal);
   const td = T > 1e-12 ? refract(d, f.normal, f.nBefore, f.nAfter) : null;
@@ -250,7 +250,7 @@ function radianceV(ctx, o, d, depth, firstRefl, thr, prev = null) {
   const P = hit.point;
   const child = BUF_T[depth + 1];
   if (f.opaque) {
-    const key = firstRefl ?? faceKey(hit);
+    const key = firstRefl ?? faceKey(hit, f);
     const N = f.normal, sp = f.opaque.specular, df = f.opaque.diffuse;
     const acc = new Float64Array(NB);
     if (sp > 0) { for (let b = 0; b < NB; b++) child[b] = thr[b] * sp; const Lr = radianceV(ctx, P, reflect(d, N), depth + 1, key, child, hit); for (let b = 0; b < NB; b++) acc[b] += sp * Lr[b]; }
@@ -261,13 +261,13 @@ function radianceV(ctx, o, d, depth, firstRefl, thr, prev = null) {
   const rd = reflect(d, f.normal);
   const td = refract(d, f.normal, f.nBefore, f.nAfter);
   if (!td) { // 全反射: そのまま子の結果を返す
-    const key = firstRefl ?? faceKey(hit);
+    const key = firstRefl ?? faceKey(hit, f);
     for (let b = 0; b < NB; b++) child[b] = thr[b];
     const Lr = radianceV(ctx, P, rd, depth + 1, key, child, hit);
     L.set(Lr);
     return L;
   }
-  const internal = hit.hits.length > 1 && f.before && f.after;
+  const internal = !!(f.before && f.after); // 部品どうし(空洞の媒質を含む)の界面
   const nb = indices(f.before), na = indices(f.after);
   const R = BUF_R[depth];
   R.fill(0);
@@ -285,7 +285,7 @@ function radianceV(ctx, o, d, depth, firstRefl, thr, prev = null) {
   }
   if (doR) {
     for (let b = 0; b < NB; b++) child[b] = (thr[b] * R[b]) / sR;
-    const Lr = radianceV(ctx, P, rd, depth + 1, firstRefl ?? faceKey(hit), child, hit);
+    const Lr = radianceV(ctx, P, rd, depth + 1, firstRefl ?? faceKey(hit, f), child, hit);
     for (let b = 0; b < NB; b++) L[b] += (R[b] / sR) * Lr[b];
   }
   if (doT) {
@@ -297,8 +297,10 @@ function radianceV(ctx, o, d, depth, firstRefl, thr, prev = null) {
 }
 
 /** 界面の識別子(共有面は部品名の組) */
-function faceKey(hit) {
-  return hit.hits.map((h) => `${h.entry.part.id}:${h.edge.seg}`).sort().join('|');
+function faceKey(hit, f) {
+  const k = hit.hits.map((h) => `${h.entry.part.id}:${h.edge.seg}`);
+  if (f && (f.before?.kind === 'cavity' || f.after?.kind === 'cavity')) k.push('cavity:0');
+  return k.sort().join('|');
 }
 
 /**

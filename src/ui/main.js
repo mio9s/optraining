@@ -402,7 +402,18 @@ function saveAppearance() {
     }
   }, 400);
 }
-const appearance = initAppearance({ getSystem: () => state.valid, getState: () => appearanceState, setState: () => saveAppearance() });
+const appearance = initAppearance({
+  getSystem: () => state.valid, getState: () => appearanceState, setState: () => saveAppearance(),
+  // 外観の部品から作ったレンズデータを結像モードで開く
+  onLoadSystem: (sys) => {
+    loadSystem(sys, { edited: false });
+    // サンプル欄に出どころを表示(「アクロマート(編集済み)」のように見えないように)
+    $('sample').querySelector('option[value="file"]')?.remove();
+    $('sample').append(new Option('外観の部品から変換', 'file', true, true));
+    $('sample').value = 'file'; state.sampleKey = 'file'; state.edited = false;
+    appearance.markSynced(); setMode('imaging');
+  },
+});
 const MODE_TEXT = {
   imaging: ['結像・収差モード', 'レンズデータを入力して、像の写り(PSF)・収差・色収差を解析します。', '① レンズデータ → ② 断面図 → ③ 結像'],
   appearance: ['外観モード', 'レンズを外から色々な角度で見て、部品どうしの界面が境界として見えるかを検証します。', '① 部品 → ② 外観(ドラッグで回転) → ③ 数値'],

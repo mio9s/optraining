@@ -118,3 +118,38 @@ test('validateScene reports a mesh overlapping a revolved part or another mesh, 
   assert.equal(v.errors.length, 1);
   assert.equal(validateScene([A, { ...meshPart(boxTris(-8, 8, -8, 8, 2, 5)), visible: false }]).ok, true);
 });
+
+// カップ(中央にくぼみ)とふた: 間の閉じた空洞を液体で満たす
+const cup = { start: [0, 0], segments: [{ type: 'line', to: [10, 0] }, { type: 'line', to: [10, 3] }, { type: 'line', to: [5, 3] }, { type: 'line', to: [5, 2] }, { type: 'line', to: [0, 2] }, { type: 'line', to: [0, 0] }] };
+const cavity = { id: 'cav', kind: 'cavity', material: oil };
+test('closed cavity between parts is filled with the cavity medium (revolved and mesh parts)', () => {
+  const nB = refractiveIndex(bk7, 0.55).toFixed(3), nO = refractiveIndex(oil, 0.55).toFixed(3);
+  for (const parts of [[revPart(cup), revPart(rect(0, 10, 3, 5))], [meshPart(revolveTris(cup, 64)), meshPart(boxTris(-12, 12, -12, 12, 3, 5))]]) {
+    const air = buildTraceScene(parts);
+    assert.equal(chain(transmitPath(air, [0.3, 0.2, -5], [0, 0, 1], 0.55).events), `1.000>${nB} ${nB}>1.000 1.000>${nB} ${nB}>1.000`);
+    const sc = buildTraceScene([...parts, cavity]);
+    assert.ok(sc.cavity.volume > 0.7 * Math.PI * 25 && sc.cavity.volume < 1.3 * Math.PI * 25, `volume ${sc.cavity.volume}`);
+    const r = transmitPath(sc, [0.3, 0.2, -5], [0, 0, 1], 0.55);
+    assert.equal(chain(r.events), `1.000>${nB} ${nB}>${nO} ${nO}>${nB} ${nB}>1.000`);
+    // 空洞の外(r > 5): 空洞の媒質は現れない
+    assert.equal(chain(transmitPath(sc, [7, 0.1, -5], [0, 0, 1], 0.55).events), `1.000>${nB} ${nB}>${nB} ${nB}>1.000`); // 接触面はガラス/ガラス
+    assert.equal(sc.mediumAt(0.5, 0.5, 2.5)?.kind, 'cavity');
+    assert.equal(sc.mediumAt(0, 0, 10), null);
+  }
+});
+test('an open gap (connected to the outside) is not a cavity', () => {
+  const sc = buildTraceScene([revPart(rect(0, 10, 0, 2)), revPart(rect(0, 10, 3, 5)), cavity]);
+  assert.equal(sc.cavity.entry, null);
+});
+
+test('flat faces next to a gentle bevel keep their exact normal (no spurious deflection from smoothing)', () => {
+  // 平らな前後面 + ゆるい面取り(折れ角 < 30°)。平面部を通る光は曲がらないはず
+  const prof = { start: [0, 0], segments: [{ type: 'line', to: [8, 0] }, { type: 'line', to: [10, 0.4] }, { type: 'line', to: [10, 2.6] }, { type: 'line', to: [8, 3] }, { type: 'line', to: [0, 3] }, { type: 'line', to: [0, 0] }] };
+  const sc = buildTraceScene([meshPart(revolveTris(prof, 48))]);
+  for (const r0 of [1, 4, 7.5]) {
+    const d0 = [0.05, 0.03, 1].map((x) => x / Math.hypot(0.05, 0.03, 1));
+    const p = transmitPath(sc, [r0 * 0.6, r0 * 0.8, -5], d0, 0.55);
+    assert.equal(p.events.length, 2);
+    assert.ok(Math.hypot(...p.d.map((v, k) => v - d0[k])) < 1e-12, `r=${r0}: ${p.d}`);
+  }
+});

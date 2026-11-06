@@ -59,3 +59,12 @@ test('fully vignetted system reports failure instead of a bogus plane', () => {
   if (!b.ok) assert.match(b.message, /届かない/);
   else assert.ok(Number.isFinite(b.rms));
 });
+
+test('best image plane refuses a virtual image (plane-parallel plate) instead of a negative screen distance', async () => {
+  const { bestImagePlane } = await import('../src/core/focus.js');
+  const air = { type: 'air' }, g = { type: 'preset', name: 'N-BK7' };
+  const sys = { surfaces: [{ kind: 'object', radius: Infinity, thickness: 200, material: air, diameter: 20 }, { kind: 'surface', radius: Infinity, thickness: 1, material: g, diameter: 15 }, { kind: 'surface', radius: Infinity, thickness: 50, material: air, diameter: 15 }, { kind: 'screen', radius: Infinity, thickness: 0, material: air, diameter: 20 }], object: { height: 10 }, screen: { width: 6, pixels: 256 }, wavelengths: [0.45, 0.52, 0.62] };
+  const r = bestImagePlane(sys);
+  assert.equal(r.ok, false);
+  assert.match(r.message, /虚像/);
+});
