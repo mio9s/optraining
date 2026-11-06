@@ -153,3 +153,16 @@ test('flat faces next to a gentle bevel keep their exact normal (no spurious def
     assert.ok(Math.hypot(...p.d.map((v, k) => v - d0[k])) < 1e-12, `r=${r0}: ${p.d}`);
   }
 });
+
+test('two cavities separated by a 50 µm membrane get their own media (oil below, air above)', () => {
+  const pu = { type: 'model', nd: 1.5, vd: 50 };
+  const lid = { start: [0, 3.55], segments: [{ type: 'line', to: [6, 3.55] }, { type: 'line', to: [6, 3.05] }, { type: 'line', to: [10, 3.05] }, { type: 'line', to: [10, 5] }, { type: 'line', to: [0, 5] }, { type: 'line', to: [0, 3.55] }] };
+  const parts = [revPart(cup), revPart(rect(0, 10, 3, 3.05), pu), revPart(lid), { id: 'cav', kind: 'cavity', material: { type: 'air' }, materials: { 0: oil }, seal: 0 }];
+  const sc = buildTraceScene(parts);
+  assert.equal(sc.cavity.comps.length, 2);
+  assert.ok(Math.abs(sc.cavity.comps[0].volume - Math.PI * 25) / (Math.PI * 25) < 0.15, `oil ${sc.cavity.comps[0].volume}`);
+  assert.ok(Math.abs(sc.cavity.comps[1].volume - Math.PI * 36 * 0.5) / (Math.PI * 18) < 0.15, `air ${sc.cavity.comps[1].volume}`);
+  const nB = refractiveIndex(bk7, 0.55).toFixed(3), nO = refractiveIndex(oil, 0.55).toFixed(3), nP = refractiveIndex(pu, 0.55).toFixed(3);
+  const r = transmitPath(sc, [0.3, 0.2, -5], [0, 0, 1], 0.55);
+  assert.equal(chain(r.events), `1.000>${nB} ${nB}>${nO} ${nO}>${nP} ${nP}>1.000 1.000>${nB} ${nB}>1.000`);
+});

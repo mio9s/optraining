@@ -52,7 +52,7 @@ function snappedMeshes(meshParts, tol) {
  */
 export function buildTraceScene(parts) {
   let mergeTol = MERGE;
-  const cavPart = parts.find((p) => p.kind === 'cavity' && p.material && p.material.type !== 'air');
+  const cavPart = parts.find((p) => p.kind === 'cavity' && ((p.material && p.material.type !== 'air') || Object.values(p.materials ?? {}).some((m) => m && m.type !== 'air') || (p.assign ?? []).some((a) => a.material?.type !== 'air') || p.detect));
   const vis = parts.filter((p) => p.visible !== false && p.kind !== 'cavity');
   const meshParts = vis.filter(isMesh);
   const tol = meshParts.reduce((m, p) => Math.max(m, p.contactTol ?? 0.002), 0);
@@ -98,10 +98,32 @@ export function buildTraceScene(parts) {
 }
 
 // ---------- 閉じた空洞 ----------
-const CAV_N = 200, CAV_MAX = 8e6;
+const CAV_N = 200, CAV_MAX = 1.6e7;
+/** 3 次元の 0/1 配列を直方体(半径 rx, ry, rz 格子)で膨張(軸ごとの累積和で O(N)) */
+function dilateBox(M, nx, ny, nz, r) {
+  let A = M;
+  const dims = [nx, ny, nz], stride = [1, nx, nx * ny];
+  for (let ax = 0; ax < 3; ax++) {
+    const R = r[ax];
+    if (R <= 0) continue;
+    const n = dims[ax], st = stride[ax], B = new Uint8Array(A.length), pre = new Int32Array(n + 1);
+    const o1 = ax === 0 ? 1 : 0, o2 = ax === 2 ? 1 : 2; // 残り 2 軸
+    const d1 = dims[o1 === ax ? 1 : o1], d2 = dims[o2];
+    const s1 = stride[o1 === ax ? 1 : o1], s2 = stride[o2];
+    for (let q = 0; q < d2; q++) for (let p = 0; p < d1; p++) {
+      const base = p * s1 + q * s2;
+      for (let i = 0; i < n; i++) pre[i + 1] = pre[i] + A[base + i * st];
+      for (let i = 0; i < n; i++) if (pre[Math.min(n, i + R + 1)] - pre[Math.max(0, i - R)] > 0) B[base + i * st] = 1;
+    }
+    A = B;
+  }
+  return A;
+}
 /**
- * 部品の外接箱を格子に分け、各格子点が部品の中か外かを z 方向の光線で調べ、箱の外側から外の格子をたどる(塗りつぶし)。
- * たどれなかった外の格子 = 閉じた空洞。格子より細い隙間は閉じているとみなされる。
+ * 部品の外接箱を格子に分け、各格子が部品の中か外かを z 方向の光線で調べ、箱の外側から外の格子をたどる(塗りつぶし)。
+ * たどれなかった外の格子 = 閉じた空洞。つながりごとに別の空洞とし、光軸方向(z)の重心の順に番号を付ける。
+ * z 方向の格子は、z 方向に並ぶ最も薄い層(膜など)の半分以下にする。
+ * cavPart: {material(既定), materials: {番号: material}(空洞ごと), seal(この幅より細い通路はふさぐ mm)}
  */
 function buildCavity(scene, cavPart) {
   const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
@@ -111,102 +133,133 @@ function buildCavity(scene, cavPart) {
     else { const r = Math.max(...e.all.map((x) => Math.max(x.a[0], x.b[0]))); const z = e.all.flatMap((x) => [x.a[1], x.b[1]]); b = [-r, -r, Math.min(...z), r, r, Math.max(...z)]; }
     for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], b[k]); hi[k] = Math.max(hi[k], b[k + 3]); }
   }
-  let cell = Math.max(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]) / CAV_N;
-  const padOf = () => Math.max(2, Math.round((cavPart.seal ?? 0) / 2 / cell) + 3);
-  const dims = () => [0, 1, 2].map((k) => Math.ceil((hi[k] - lo[k]) / cell) + 2 * padOf());
-  let n = dims();
-  while (n[0] * n[1] * n[2] > CAV_MAX) { cell *= 1.25; n = dims(); }
-  const o = lo.map((v) => v - padOf() * cell);
-  const [nx, ny, nz] = n, G = new Uint8Array(nx * ny * nz); // 0 外, 1 部品, 2 空洞
-  const idx = (i, j, k) => (k * ny + j) * nx + i;
+  const seal = cavPart.seal ?? 0;
+  let cell = Math.max(hi[0] - lo[0], hi[1] - lo[1]) / CAV_N;
+  if (!(cell > 0)) cell = (hi[2] - lo[2]) / CAV_N;
+  // まず z 方向の光線で各列の界面を集める(列は xy の格子の中心)
   const dz = [0, 0, 1];
-  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
-    // 頂点・辺をちょうど通らないよう、わずかにずらす
-    const x = o[0] + (i + 0.5) * cell + cell * 1.3e-4, y = o[1] + (j + 0.5) * cell + cell * 0.7e-4;
-    let p = [x, y, o[2]], t = 0, inside = null, prev = null;
-    for (let guard = 0; guard < 400; guard++) {
-      const hit = intersect(scene, p, dz, T_MIN, Infinity, prev);
-      const zEnd = hit ? hit.point[2] : o[2] + nz * cell;
-      if (inside) {
-        const k0 = Math.max(0, Math.ceil((t - o[2]) / cell - 0.5)), k1 = Math.min(nz - 1, Math.floor((zEnd - o[2]) / cell - 0.5));
-        for (let k = k0; k <= k1; k++) G[idx(i, j, k)] = 1;
+  const columns = (c) => {
+    const nx = Math.ceil((hi[0] - lo[0]) / c) + 4, ny = Math.ceil((hi[1] - lo[1]) / c) + 4, o = [lo[0] - 2 * c, lo[1] - 2 * c];
+    const cols = new Array(nx * ny);
+    let thin = Infinity;
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+      const x = o[0] + (i + 0.5) * c + c * 1.3e-4, y = o[1] + (j + 0.5) * c + c * 0.7e-4;
+      let p = [x, y, lo[2] - 1], prev = null, inside = null, zPrev = null;
+      const ev = [];
+      for (let g = 0; g < 400; g++) {
+        const hit = intersect(scene, p, dz, T_MIN, Infinity, prev);
+        if (!hit) break;
+        const f = interfaceAt(scene, hit, dz, 0.55), z = hit.point[2];
+        // 部品の層(膜など)の最も薄い厚み。くさび形に細る隙間は対象外。10 µm 未満は書き出しの丸めとみなす
+        if (inside && zPrev !== null && z - zPrev > 0.01) thin = Math.min(thin, z - zPrev);
+        ev.push([zPrev, z, inside ? 1 : 0]);
+        inside = f.after; zPrev = z; p = hit.point; prev = hit;
       }
-      if (!hit) break;
-      const f = interfaceAt(scene, hit, dz, 0.55);
-      inside = f.after; t = zEnd; p = hit.point; prev = hit;
+      cols[j * nx + i] = ev;
     }
-  }
-  // 細い通路をふさぐ: 部品からの距離(格子数、26 近傍)が rs 以下の空きは、外からたどるときだけ通れない(収縮 → 塗りつぶし → 膨張)
-  const rs = Math.max(0, Math.round((cavPart.seal ?? 0) / 2 / cell));
-  let dist = null;
-  if (rs > 0) {
-    dist = new Uint8Array(G.length).fill(255);
-    let front = [];
-    for (let q = 0; q < G.length; q++) if (G[q] === 1) { dist[q] = 0; front.push(q); }
-    for (let step = 1; step <= rs && front.length; step++) {
-      const next = [];
-      for (const q of front) {
-        const i = q % nx, j = ((q - i) / nx) % ny, k = Math.floor(q / (nx * ny));
-        for (let c = -1; c <= 1; c++) for (let bb = -1; bb <= 1; bb++) for (let a2 = -1; a2 <= 1; a2++) {
-          const I = i + a2, J = j + bb, K = k + c;
-          if (I < 0 || J < 0 || K < 0 || I >= nx || J >= ny || K >= nz) continue;
-          const w = idx(I, J, K);
-          if (dist[w] > step) { dist[w] = step; next.push(w); }
-        }
-      }
-      front = next;
-    }
-  }
-  const open = (q) => !G[q] && (!dist || dist[q] > rs);
-  // 箱の外周から外の格子をたどる
-  const seen = new Uint8Array(G.length), stack = [];
-  const push = (i, j, k) => { const q = idx(i, j, k); if (open(q) && !seen[q]) { seen[q] = 1; stack.push(q); } };
-  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) { push(i, j, 0); push(i, j, nz - 1); }
-  for (let k = 0; k < nz; k++) { for (let i = 0; i < nx; i++) { push(i, 0, k); push(i, ny - 1, k); } for (let j = 0; j < ny; j++) { push(0, j, k); push(nx - 1, j, k); } }
-  while (stack.length) {
-    const q = stack.pop(), i = q % nx, j = ((q - i) / nx) % ny, k = Math.floor(q / (nx * ny));
-    if (i > 0) push(i - 1, j, k); if (i < nx - 1) push(i + 1, j, k);
-    if (j > 0) push(i, j - 1, k); if (j < ny - 1) push(i, j + 1, k);
-    if (k > 0) push(i, j, k - 1); if (k < nz - 1) push(i, j, k + 1);
-  }
-  if (rs > 0) { // 膨張: たどれた外の領域を rs 格子ぶん空きへ広げる(部品の近くの外気を戻す。通路の入口 rs 格子は外気 = 栓)
-    let front = [];
-    for (let q = 0; q < G.length; q++) if (seen[q]) front.push(q);
-    for (let step = 1; step <= rs && front.length; step++) {
-      const next = [];
-      for (const q of front) {
-        const i = q % nx, j = ((q - i) / nx) % ny, k = Math.floor(q / (nx * ny));
-        for (let c = -1; c <= 1; c++) for (let bb = -1; bb <= 1; bb++) for (let a2 = -1; a2 <= 1; a2++) {
-          const I = i + a2, J = j + bb, K = k + c;
-          if (I < 0 || J < 0 || K < 0 || I >= nx || J >= ny || K >= nz) continue;
-          const w = idx(I, J, K);
-          if (!G[w] && !seen[w]) { seen[w] = 1; next.push(w); }
-        }
-      }
-      front = next;
-    }
-  }
-  let count = 0;
-  for (let q = 0; q < G.length; q++) if (!G[q] && !seen[q]) { G[q] = 2; count++; }
-  if (!count) return { entry: null, volume: 0, cell };
-  const entry = { part: { id: 'cavity', name: '空洞の媒質', material: cavPart.material, coatings: {} }, kind: 'cavity' };
-  const at = (x, y, z) => {
-    const i = Math.floor((x - o[0]) / cell), j = Math.floor((y - o[1]) / cell), k = Math.floor((z - o[2]) / cell);
-    if (i < 0 || j < 0 || k < 0 || i >= nx || j >= ny || k >= nz) return 0;
-    return G[idx(i, j, k)];
+    return { nx, ny, o, cols, thin };
   };
-  return { entry, volume: count * cell ** 3, cell, at, grid: { G, o, nx, ny, nz } };
+  let C = columns(cell);
+  let cz = Math.min(cell, Math.max(0.005, (Number.isFinite(C.thin) ? C.thin : cell) / 2.5));
+  const pz = (c) => Math.max(2, Math.ceil(seal / 2 / c) + 3);
+  let nz = Math.ceil((hi[2] - lo[2]) / cz) + 2 * pz(cz);
+  while (C.nx * C.ny * nz > CAV_MAX) { // 大きすぎる: 横の格子を粗くする
+    cell *= 1.25; C = columns(cell);
+    cz = Math.min(cell, Math.max(0.005, (Number.isFinite(C.thin) ? C.thin : cell) / 2.5));
+    nz = Math.ceil((hi[2] - lo[2]) / cz) + 2 * pz(cz);
+  }
+  const { nx, ny } = C, oz = lo[2] - pz(cz) * cz;
+  const o = [C.o[0], C.o[1], oz];
+  const G = new Uint8Array(nx * ny * nz); // 0 外, 1 部品, 2 空洞
+  const idx = (i, j, k) => (k * ny + j) * nx + i;
+  for (let q = 0; q < nx * ny; q++) {
+    const i = q % nx, j = (q - i) / nx;
+    for (const [z0, z1, inside] of C.cols[q]) {
+      if (!inside || z0 === null) continue;
+      const k0 = Math.max(0, Math.ceil((z0 - oz) / cz - 0.5)), k1 = Math.min(nz - 1, Math.floor((z1 - oz) / cz - 0.5));
+      for (let k = k0; k <= k1; k++) G[idx(i, j, k)] = 1;
+    }
+  }
+  // 細い通路をふさぐ: 部品を半径 seal/2 だけ膨らませた所は、外からたどるときだけ通れない(収縮 → 塗りつぶし → 膨張)
+  const r = [Math.round(seal / 2 / cell), Math.round(seal / 2 / cell), Math.round(seal / 2 / cz)];
+  const sealing = r.some((x) => x > 0);
+  let blocked = null;
+  if (sealing) { const P = new Uint8Array(G.length); for (let q = 0; q < G.length; q++) P[q] = G[q] === 1 ? 1 : 0; blocked = dilateBox(P, nx, ny, nz, r); }
+  const open = (q) => !G[q] && (!blocked || !blocked[q]);
+  const seen = new Uint8Array(G.length), stack = [];
+  const push = (q) => { if (open(q) && !seen[q]) { seen[q] = 1; stack.push(q); } };
+  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) { push(idx(i, j, 0)); push(idx(i, j, nz - 1)); }
+  for (let k = 0; k < nz; k++) { for (let i = 0; i < nx; i++) { push(idx(i, 0, k)); push(idx(i, ny - 1, k)); } for (let j = 0; j < ny; j++) { push(idx(0, j, k)); push(idx(nx - 1, j, k)); } }
+  const flood = (ok, mark, val) => {
+    while (stack.length) {
+      const q = stack.pop(), i = q % nx, j = ((q - i) / nx) % ny, k = Math.floor(q / (nx * ny));
+      const nb = [i > 0 ? q - 1 : -1, i < nx - 1 ? q + 1 : -1, j > 0 ? q - nx : -1, j < ny - 1 ? q + nx : -1, k > 0 ? q - nx * ny : -1, k < nz - 1 ? q + nx * ny : -1];
+      for (const w of nb) if (w >= 0 && ok(w) && !mark[w]) { mark[w] = val; stack.push(w); }
+    }
+  };
+  flood(open, seen, 1);
+  if (sealing) { // 膨張: たどれた外の領域を同じだけ空きへ広げる(部品の近くの外気を戻す。通路の入口は外気 = 栓)
+    const back = dilateBox(seen, nx, ny, nz, r);
+    for (let q = 0; q < G.length; q++) if (back[q] && !G[q]) seen[q] = 1;
+  }
+  // 空洞をつながりごとに分ける
+  const comp = new Int32Array(G.length).fill(-1), info = [];
+  for (let q = 0; q < G.length; q++) {
+    if (G[q] || seen[q] || comp[q] >= 0) continue;
+    const id = info.length;
+    comp[q] = id; stack.push(q);
+    let n = 0, sz = 0, sx = 0, sy = 0;
+    while (stack.length) {
+      const u = stack.pop(), i = u % nx, j = ((u - i) / nx) % ny, k = Math.floor(u / (nx * ny));
+      n++; sx += i; sy += j; sz += k;
+      const nb = [i > 0 ? u - 1 : -1, i < nx - 1 ? u + 1 : -1, j > 0 ? u - nx : -1, j < ny - 1 ? u + nx : -1, k > 0 ? u - nx * ny : -1, k < nz - 1 ? u + nx * ny : -1];
+      for (const w of nb) if (w >= 0 && !G[w] && !seen[w] && comp[w] < 0) { comp[w] = id; stack.push(w); }
+    }
+    info.push({ id, cells: n, centroid: [o[0] + (sx / n + 0.5) * cell, o[1] + (sy / n + 0.5) * cell, oz + (sz / n + 0.5) * cz] });
+  }
+  // 小さすぎる空洞は、縁の丸め・部品の合わせ目の隙間とみなして除く(最大の空洞の 0.5 % 未満かつ 1 mm³ 未満)
+  const vcell = cell * cell * cz, vmax = Math.max(0, ...info.map((c) => c.cells)) * vcell;
+  const real = info.filter((c) => c.cells * vcell >= Math.min(1, 0.005 * vmax) && c.cells * vcell > 1e-3).sort((a, b) => a.centroid[2] - b.centroid[2]);
+  // 空洞ごとの媒質: assign = [{at:[x,y,z], material}] はその点を含む空洞(なければ重心が 2 mm 以内で最も近い空洞)に、
+  // materials = {番号: material} は z 順の番号に。どちらもなければ既定の material
+  const cellIdx = (x, y, z) => { const i = Math.floor((x - o[0]) / cell), j = Math.floor((y - o[1]) / cell), k = Math.floor((z - oz) / cz); return i < 0 || j < 0 || k < 0 || i >= nx || j >= ny || k >= nz ? -1 : idx(i, j, k); };
+  const assigned = new Map();
+  for (const a of cavPart.assign ?? []) {
+    let hit = -1;
+    const q = cellIdx(...a.at);
+    if (q >= 0 && comp[q] >= 0) hit = real.findIndex((c) => c.id === comp[q]);
+    if (hit < 0) { let bd = 2; real.forEach((c, n) => { const d = Math.hypot(...c.centroid.map((v, k) => v - a.at[k])); if (d < bd) { bd = d; hit = n; } }); }
+    if (hit >= 0) assigned.set(hit, a.material);
+  }
+  const comps = real.map((c, n) => {
+    const mat = assigned.get(n) ?? cavPart.materials?.[n] ?? cavPart.material;
+    return { index: n, volume: c.cells * vcell, centroid: c.centroid, material: mat,
+      entry: mat && mat.type !== 'air' ? { part: { id: `cavity${n}`, name: `空洞 ${n + 1}`, material: mat, coatings: {} }, kind: 'cavity' } : null };
+  });
+  const byId = new Map(real.map((c, n) => [c.id, comps[n]]));
+  for (let q = 0; q < G.length; q++) if (comp[q] >= 0) { const c = byId.get(comp[q]); G[q] = c?.entry ? 2 : 0; }
+  const cellOf = (x, y, z) => {
+    const i = Math.floor((x - o[0]) / cell), j = Math.floor((y - o[1]) / cell), k = Math.floor((z - oz) / cz);
+    if (i < 0 || j < 0 || k < 0 || i >= nx || j >= ny || k >= nz) return -1;
+    return idx(i, j, k);
+  };
+  const at = (x, y, z) => { const q = cellOf(x, y, z); return q < 0 ? 0 : G[q]; };
+  const entryAt = (x, y, z) => { const q = cellOf(x, y, z); if (q < 0 || G[q] !== 2) return null; return byId.get(comp[q])?.entry ?? null; };
+  const filled = comps.filter((c) => c.entry);
+  return { comps, entry: filled[0]?.entry ?? null, volume: filled.reduce((a, c) => a + c.volume, 0), cell, cz, at, entryAt, grid: { G, o, nx, ny, nz, cz } };
 }
 
-/** 部品の外側の点 p(面の外向き法線 n)が閉じた空洞か。面に接する格子が部品側なら外へ少しずつ進めて調べる */
-function inCavity(cav, p, n) {
-  if (!cav?.entry) return false;
-  for (let s = 0; s < 4; s++) {
-    const d = (s * 0.5 + 0.05) * cav.cell;
-    const g = cav.at(p[0] + n[0] * d, p[1] + n[1] * d, p[2] + n[2] * d);
-    if (g !== 1) return g === 2;
+/** 部品の外側の点 p(面の外向き法線 n)がある空洞の媒質(なければ null)。面に接する格子が部品側なら外へ少しずつ進めて調べる */
+function cavityEntryAt(cav, p, n) {
+  if (!cav?.entry) return null;
+  // 格子は z と xy で大きさが違う: 細かい方から、粗い方の 1.5 格子ぶんまで外へ進めて調べる
+  const ds = [0.05, 0.5, 1, 1.5, 2].map((k) => k * cav.cz).concat([0.5, 1, 1.5].map((k) => k * cav.cell)).sort((a, b) => a - b);
+  for (const d of ds) {
+    const x = p[0] + n[0] * d, y = p[1] + n[1] * d, z = p[2] + n[2] * d;
+    const g = cav.at(x, y, z);
+    if (g !== 1) return g === 2 ? cav.entryAt(x, y, z) : null;
   }
-  return false;
+  return null;
 }
 
 function aabbHit(b, o, d, tmin, tmax) {
@@ -405,7 +458,7 @@ function mediumAt(scene, x, y, z) {
     if (e.kind === 'mesh') { if (meshContains(e.acc, [x, y, z])) return e; continue; }
     if (containsPoint(e.all, r, z)) return e;
   }
-  if (scene.cavity?.entry && scene.cavity.at(x, y, z) === 2) return scene.cavity.entry;
+  if (scene.cavity?.entry) { const c = scene.cavity.entryAt(x, y, z); if (c) return c; }
   return null; // 周囲(空気)
 }
 
@@ -432,7 +485,7 @@ export function interfaceAt(scene, hit, d, lambdaUm) {
   // 部品は重ならないので、面の内側 = 当たった部品、外側 = 同じ位置で当たった共有面の相手(なければ空気)
   const other = hit.hits.find((x) => x.entry !== h.entry);
   // 相手がいなければ空気、ただし閉じた空洞の中なら空洞の媒質
-  const inside = h.entry, outside = other ? other.entry : inCavity(scene.cavity, hit.point, Ng) ? scene.cavity.entry : null;
+  const inside = h.entry, outside = other ? other.entry : cavityEntryAt(scene.cavity, hit.point, Ng);
   const entering = d[0] * Ng[0] + d[1] * Ng[1] + d[2] * Ng[2] < 0;
   const before = entering ? outside : inside, after = entering ? inside : outside;
   let toward = entering ? N : [-N[0], -N[1], -N[2]]; // 入射側を向く法線(屈折・反射には滑らかな法線)

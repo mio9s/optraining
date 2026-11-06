@@ -59,7 +59,8 @@ export function initAppearance({ getSystem, getState, setState, onLoadSystem }) 
   /** 描画・解析に渡す部品: 表示中の部品 + 閉じた空洞の媒質(空気以外のとき) */
   function cavityPart() {
     const c = st.cavity;
-    return c?.material && c.material.type !== 'air' ? { id: 'cavity', kind: 'cavity', material: c.material, seal: c.seal ?? 0 } : null;
+    const on = c && ((c.material && c.material.type !== 'air') || c.detect || (c.assign ?? []).some((a) => a.material?.type !== 'air'));
+    return on ? { id: 'cavity', kind: 'cavity', material: c.material ?? { type: 'air' }, assign: c.assign ?? [], seal: c.seal ?? 0, detect: !!c.detect } : null;
   }
   function sceneParts() { const cp = cavityPart(); return [...st.parts.filter((p) => p.visible !== false), ...(cp ? [cp] : [])]; }
   let lastScene = null;
@@ -192,7 +193,7 @@ export function initAppearance({ getSystem, getState, setState, onLoadSystem }) 
     });
     const s = Math.min((W - 20) / Math.max(z1 - z0, 1e-3), (H - 20) / (2 * rMax));
     const X = (z) => 10 + (z - z0) * s + ((W - 20) - (z1 - z0) * s) / 2, Y = (r) => H / 2 - r * s;
-    const pal = materialPalette([...st.parts.map((p) => p.material), ...(cavityPart() ? [st.cavity.material] : [])]);
+    const pal = materialPalette([...st.parts.map((p) => p.material), ...(cavityPart() ? [st.cavity.material, ...(st.cavity.assign ?? []).map((a) => a.material)] : [])]);
     vis.forEach((p, i) => {
       if (ed[i].cut) {
         ctx.strokeStyle = p.material.type === 'opaque' ? 'rgba(60,60,60,0.9)' : pal.get(materialKey(p.material))?.solid ?? '#2b6cb0';
@@ -212,11 +213,14 @@ export function initAppearance({ getSystem, getState, setState, onLoadSystem }) 
     // 閉じた空洞の媒質(y = 0 の切り口の格子)
     const cav = lastScene?.cavity;
     if (cav?.entry && cav.grid) {
-      const { G, o, nx, ny, nz } = cav.grid, j = Math.floor((0 - o[1]) / cav.cell);
+      const { G, o, nx, ny, nz } = cav.grid, cz = cav.grid.cz ?? cav.cell, j = Math.floor((0 - o[1]) / cav.cell);
       if (j >= 0 && j < ny) {
-        ctx.fillStyle = pal.get(materialKey(cav.entry.part.material))?.fill(0.55) ?? 'rgba(230,150,40,0.5)';
-        const wpx = Math.max(1, cav.cell * s);
-        for (let k = 0; k < nz; k++) for (let i = 0; i < nx; i++) if (G[(k * ny + j) * nx + i] === 2) ctx.fillRect(X(o[2] + k * cav.cell), Y(o[0] + (i + 1) * cav.cell), wpx + 0.5, wpx + 0.5);
+        const wz = Math.max(1, cz * s), wx = Math.max(1, cav.cell * s);
+        for (let k = 0; k < nz; k++) for (let i = 0; i < nx; i++) if (G[(k * ny + j) * nx + i] === 2) {
+          const e = cav.entryAt(o[0] + (i + 0.5) * cav.cell, o[1] + (j + 0.5) * cav.cell, o[2] + (k + 0.5) * cz);
+          ctx.fillStyle = pal.get(materialKey(e?.part.material ?? cav.entry.part.material))?.fill(0.6) ?? 'rgba(230,150,40,0.5)';
+          ctx.fillRect(X(o[2] + k * cz), Y(o[0] + (i + 1) * cav.cell), wz + 0.5, wx + 0.5);
+        }
       }
     }
     ctx.strokeStyle = '#888'; ctx.setLineDash([4, 3]); ctx.beginPath(); ctx.moveTo(0, H / 2); ctx.lineTo(W, H / 2); ctx.stroke(); ctx.setLineDash([]);
@@ -450,14 +454,50 @@ export function initAppearance({ getSystem, getState, setState, onLoadSystem }) 
       }
     }
     $('ap-cav-seal').value = String(st.cavity.seal ?? 0);
-    $('ap-cav-seal').disabled = m.type === 'air';
+    $('ap-cav-seal').disabled = !cavityPart();
+    $('ap-cav-each').checked = !!st.cavity.detect;
+  }
+  /** 媒質の選択(空気・ガラス・nd/νd)。withDefault なら「既定と同じ」(null)も選べる */
+  function mediumSelect(cur, onChange, withDefault) {
+    const sel = h('select', { 'aria-label': '空洞の媒質' }, ...(withDefault ? [h('option', { value: 'default' }, '既定と同じ')] : []), h('option', { value: 'air' }, '空気'),
+      h('optgroup', { label: 'ガラス・樹脂' }, ...PRESETS.map((x) => h('option', { value: `preset:${x.name}` }, x.name))), h('option', { value: 'model' }, '液体・樹脂など(nd・νd)'));
+    sel.value = !cur ? 'default' : cur.type === 'preset' ? `preset:${cur.name}` : cur.type;
+    const box = h('span');
+    if (cur?.type === 'model') for (const [k, label] of [['nd', 'nd'], ['vd', 'νd']]) {
+      const inp = h('input', { type: 'text', value: String(cur[k]), class: 'num', 'aria-label': label });
+      inp.addEventListener('change', () => { const v = parseNumber(inp.value); if (v > 0) onChange({ ...cur, [k]: v }); else inp.classList.add('invalid'); });
+      box.append(h('label', { class: 'field' }, h('span', {}, label), inp));
+    }
+    sel.addEventListener('change', () => { const v = sel.value; onChange(v === 'default' ? null : v === 'air' ? { type: 'air' } : v === 'model' ? { type: 'model', nd: 1.5, vd: 50 } : { type: 'preset', name: v.slice(7) }); });
+    return h('span', { class: 'ap-row' }, sel, box);
+  }
+  /** 見つけた空洞の一覧(空洞ごとに媒質を選ぶ) */
+  function renderCavityList(scene) {
+    const box = $('ap-cav-list');
+    box.replaceChildren();
+    const comps = scene?.cavity?.comps ?? [];
+    if (!st.cavity.detect || !comps.length) return;
+    const assign = st.cavity.assign ?? (st.cavity.assign = []);
+    const findA = (c) => assign.findIndex((a) => Math.hypot(...a.at.map((v, k) => v - c.centroid[k])) < 0.5);
+    comps.forEach((c, n) => {
+      const ai = findA(c), cur = ai >= 0 ? assign[ai].material : null;
+      box.append(h('div', { class: 'ap-cav-row' },
+        h('span', {}, `空洞 ${n + 1}: ${fmt(c.volume, 1)} mm³、光軸方向 z ≈ ${fmt(c.centroid[2], 2)} mm`),
+        mediumSelect(cur, (m) => {
+          const i = findA(c);
+          if (m === null) { if (i >= 0) assign.splice(i, 1); } else if (i >= 0) assign[i].material = m; else assign.push({ at: c.centroid.map((v) => +v.toFixed(4)), material: m });
+          changed(true);
+        }, true)));
+    });
   }
   function showCavityInfo(scene) {
     const el = $('ap-cav-info');
     if (!el) return;
-    if (!cavityPart()) { el.textContent = '空洞は周囲と同じ空気として扱っています。液体を封入したレンズなどは媒質を選んでください。'; el.classList.remove('warn'); return; }
+    renderCavityList(scene);
+    if (!cavityPart()) { el.textContent = '空洞は周囲と同じ空気として扱っています。液体を封入したレンズなどは媒質を選ぶか、「空洞ごとに選ぶ」をオンにしてください。'; el.classList.remove('warn'); return; }
     const c = scene.cavity;
-    if (c?.entry) { el.textContent = `閉じた空洞を見つけました: 体積 ${fmt(c.volume, 1)} mm³(判定の格子 ${fmt(c.cell, 3)} mm)。断面図に媒質の色で表示しています。`; el.classList.remove('warn'); }
+    if (c?.comps?.length && st.cavity.detect) { el.textContent = `閉じた空洞を ${c.comps.length} 個見つけました(判定の格子 横 ${fmt(c.cell, 3)} mm・光軸方向 ${fmt(c.cz, 3)} mm)。上の一覧で空洞ごとに媒質を選べます。断面図に液体・ガラスの空洞を色で表示します。`; el.classList.remove('warn'); }
+    else if (c?.entry) { el.textContent = `閉じた空洞を見つけました: 体積 ${fmt(c.volume, 1)} mm³(判定の格子 ${fmt(c.cell, 3)} mm)。断面図に媒質の色で表示しています。`; el.classList.remove('warn'); }
     else { el.textContent = '閉じた空洞が見つかりません。注入口などの細い通路で外とつながっている場合は「細い通路をふさぐ幅」をその通路の幅より少し大きくしてください。'; el.classList.add('warn'); }
   }
 
@@ -626,7 +666,7 @@ export function initAppearance({ getSystem, getState, setState, onLoadSystem }) 
   // ---------- 数値: 寄与 ----------
   function names() {
     const byId = Object.fromEntries(st.parts.map((p) => [p.id, p]));
-    return (key) => key.split('|').map((k) => { const [id, seg] = k.split(':'); if (id === 'cavity') return '空洞の媒質'; const p = byId[id]; return p ? `${p.name} ${faceLabel(p, +seg) ?? `面${+seg + 1}`}` : k; }).join(' / ');
+    return (key) => key.split('|').map((k) => { const [id, seg] = k.split(':'); if (id.startsWith('cavity')) return `空洞 ${+id.slice(6) + 1} の媒質`; const p = byId[id]; return p ? `${p.name} ${faceLabel(p, +seg) ?? `面${+seg + 1}`}` : k; }).join(' / ');
   }
   function onFrame(buf) {
     const tot = buf.y.reduce((a, b) => a + b, 0);
@@ -733,6 +773,7 @@ export function initAppearance({ getSystem, getState, setState, onLoadSystem }) 
       if (v !== 'air' && !(st.cavity.seal > 0)) st.cavity.seal = 0;
       cavityControls(); changed(true);
     });
+    $('ap-cav-each').addEventListener('change', () => { st.cavity.detect = $('ap-cav-each').checked; cavityControls(); changed(true); });
     $('ap-cav-seal').addEventListener('change', () => { const v = parseNumber($('ap-cav-seal').value); if (v >= 0) { st.cavity.seal = v; changed(true); } else $('ap-cav-seal').classList.add('invalid'); });
     $('ap-move-stl').addEventListener('click', openMoveStl);
     $('ap-to-lens').addEventListener('click', openToLens);

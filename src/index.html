@@ -118,11 +118,13 @@
     <div id="ap-parts"></div>
     <p class="errors" id="ap-errors"></p>
     <fieldset class="ap-cavity">
-      <legend>閉じた空洞(部品に囲まれた隙間)の媒質</legend>
+      <legend>閉じた空洞(部品に囲まれた隙間)の媒質 <small>上: 既定(すべての空洞)</small></legend>
       <div class="ap-row">
         <select id="ap-cav-mat" aria-label="空洞の媒質"></select><span id="ap-cav-model"></span>
         <label class="field" title="注入口のように外とつながる細い通路を、この幅まではふさがっているとみなします(0 = 完全に閉じた空洞だけ)。広くしすぎると、外とつながった細い空気の隙間まで液体になります"><span>細い通路をふさぐ幅</span><input type="text" id="ap-cav-seal" class="num"><small>mm</small></label>
       </div>
+      <label class="check" title="閉じた空洞を探して一覧にし、空洞ごとに媒質を選びます(例: 膜の下はオイル、膜の上は空気)"><input type="checkbox" id="ap-cav-each"> 空洞ごとに選ぶ</label>
+      <div id="ap-cav-list"></div>
       <p class="note" id="ap-cav-info"></p>
     </fieldset>
     <h3 class="sub">断面図(全部品)</h3>

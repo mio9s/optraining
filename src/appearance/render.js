@@ -299,7 +299,7 @@ function radianceV(ctx, o, d, depth, firstRefl, thr, prev = null) {
 /** 界面の識別子(共有面は部品名の組) */
 function faceKey(hit, f) {
   const k = hit.hits.map((h) => `${h.entry.part.id}:${h.edge.seg}`);
-  if (f && (f.before?.kind === 'cavity' || f.after?.kind === 'cavity')) k.push('cavity:0');
+  if (f) for (const e of [f.before, f.after]) if (e?.kind === 'cavity') k.push(`${e.part.id}:0`);
   return k.sort().join('|');
 }
 
