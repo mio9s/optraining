@@ -6,9 +6,12 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # 公開(pages.yml)の前にも同じ確認を呼び出して使う(手順はこのファイルだけに書く)
+  workflow_call:
 
+# 呼び出されたときの github.workflow は呼び出し元の名前になるので、push で走る Test と取り消し合わない
 concurrency:
-  group: test-${{ github.ref }}
+  group: ${{ github.workflow }}-test-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
