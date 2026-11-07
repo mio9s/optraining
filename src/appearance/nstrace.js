@@ -469,14 +469,16 @@ export function intersect(scene, o, d, tmin = T_MIN, tmax = Infinity, prev = nul
       continue;
     }
     const { nodes, edges, prims } = entry;
-    if (!entry.box || !boxHit(entry.box, o, d, tmin, best + MERGE)) continue;
+    // 直前の界面でまとめた部品なら、許容差内の再交差を飛ばす(STL と接する回転体も同じ)
+    const skipR = sk && sk.entries.includes(entry) ? sk.dist : -1;
+    if (!entry.box || !boxHit(entry.box, o, d, tmin, best + MG)) continue;
     for (const pr of prims) {
       tmp.length = 0;
-      if (pr.kind === 'sphere') { if (!boxHit(pr.box, o, d, tmin, best + MERGE)) continue; sphereHits(pr, o, d, tmin, tmp); }
+      if (pr.kind === 'sphere') { if (!boxHit(pr.box, o, d, tmin, best + MG)) continue; sphereHits(pr, o, d, tmin, tmp); }
       else edgeHits(pr.edge, o, d, tmin, tmp);
       for (let q = 0; q < tmp.length; q++) {
         const h = tmp[q];
-        if (h.t > best + MERGE) continue;
+        if (h.t > best + MG || h.t < skipR) continue;
         h.entry = entry; h.edge = pr.edge ?? pr.segRef ?? (pr.segRef = { seg: pr.seg });
         found.push(h);
         if (h.t < best) best = h.t;
@@ -486,14 +488,14 @@ export function intersect(scene, o, d, tmin = T_MIN, tmax = Infinity, prev = nul
     const stack = [0];
     while (stack.length) {
       const n = nodes[stack.pop()];
-      if (!boxHit(n, o, d, tmin, best + MERGE)) continue;
+      if (!boxHit(n, o, d, tmin, best + MG)) continue;
       if (!n.leaf) { stack.push(n.l, n.r); continue; }
       for (let i = n.lo; i < n.hi; i++) {
         tmp.length = 0;
         edgeHits(edges[i], o, d, tmin, tmp);
         for (let q = 0; q < tmp.length; q++) {
           const h = tmp[q];
-          if (h.t > best + MERGE) continue;
+          if (h.t > best + MG || h.t < skipR) continue;
           h.entry = entry; h.edge = edges[i];
           found.push(h);
           if (h.t < best) best = h.t;
@@ -502,7 +504,10 @@ export function intersect(scene, o, d, tmin = T_MIN, tmax = Infinity, prev = nul
     }
   }
   if (!found.length || best === tmax) return null;
-  const hits = found.filter((h) => h.t <= best + MG);
+  // 接触とみなす距離(STL の接触の許容差 MG)は、STL の部品が関わる組だけに使う。回転体どうしは厳密(MERGE)にまとめる
+  const first = found.reduce((a, h) => (h.t < a.t ? h : a));
+  const meshFirst = first.entry.kind === 'mesh';
+  const hits = found.filter((h) => h.t <= best + (meshFirst || h.entry.kind === 'mesh' ? MG : MERGE));
   // 同じ部品の隣接辺の重複(頂点上)は 1 つに
   hits.sort((a, b) => a.t - b.t);
   const uniq = [];

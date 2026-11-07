@@ -224,3 +224,16 @@ test('cavity data built once can be passed (structured clone, as to a worker) an
   for (const sc of [a, b]) assert.equal(chain(transmitPath(sc, [0.3, 0.2, -5], [0, 0, 1], 0.55).events), chain(transmitPath(a, [0.3, 0.2, -5], [0, 0, 1], 0.55).events));
   assert.deepEqual(b.cavity.comps.map((c) => [c.volume, c.material]), a.cavity.comps.map((c) => [c.volume, c.material]));
 });
+
+test('contact tolerance: revolved plates 1 µm apart keep their air gap; an STL/revolved contact merges whichever comes first', () => {
+  const nB = refractiveIndex(bk7, 0.55).toFixed(3);
+  const far = meshPart(boxTris(30, 40, 30, 40, 0, 2)); // 光線の通らない STL(シーンに 2 µm の許容差を持ち込む)
+  const sc = buildTraceScene([revPart(rect(0, 10, 0, 2)), revPart(rect(0, 10, 2.001, 4)), far]);
+  assert.equal(chain(transmitPath(sc, [1, 1, -5], [0, 0, 1], 0.55).events), `1.000>${nB} ${nB}>1.000 1.000>${nB} ${nB}>1.000`);
+  // STL と回転体の接触(1 µm のずれ)は、どちらが光の手前でも 1 つの界面にまとめる(空気層を作らない)
+  for (const [a, b] of [[revPart(rect(0, 12, 0, 3)), meshPart(boxTris(-8, 8, -8, 8, 3.001, 5), oil)], [meshPart(boxTris(-8, 8, -8, 8, 0, 3), oil), revPart(rect(0, 12, 3.001, 5))]]) {
+    const ev = transmitPath(buildTraceScene([a, b]), [1, 1, -5], [0, 0, 1], 0.55).events;
+    assert.equal(ev.length, 3, chain(ev));
+    assert.ok(ev[1].before && ev[1].after, 'contact face is part/part, no air');
+  }
+});
