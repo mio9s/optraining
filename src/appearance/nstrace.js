@@ -92,7 +92,8 @@ export function buildTraceScene(parts) {
     return { part: p, index: pi, all, edges, nodes, prims, box };
   });
   const scene = { list, mergeTol };
-  scene.cavity = cavPart && list.length ? buildCavity(scene, cavPart) : null;
+  // 画面で作った空洞の格子があれば使う(Worker が作り直さない)
+  scene.cavity = cavPart && list.length ? (cavPart.data ? cavityFromData(cavPart.data) : buildCavity(scene, cavPart)) : null;
   scene.mediumAt = (x, y, z) => mediumAt(scene, x, y, z);
   return scene;
 }
@@ -266,19 +267,37 @@ function buildCavity(scene, cavPart) {
     return { index: n, volume: c.cells * vcell, centroid: c.centroid, seed: c.seed, sealed: c.sealed, assign: ai, material: mat,
       entry: mat && mat.type !== 'air' ? { part: { id: `cavity${n}`, name: `空洞 ${n + 1}`, material: mat, coatings: {} }, kind: 'cavity' } : null };
   });
-  const byId = new Map(real.map((c, n) => [c.id, comps[n]]));
-  for (let q = 0; q < G.length; q++) if (comp[q] >= 0) { const c = byId.get(comp[q]); G[q] = c?.entry ? 2 : 0; }
-  const cellOf = (x, y, z) => {
-    const i = Math.floor((x - o[0]) / cell), j = Math.floor((y - o[1]) / cell), k = Math.floor((z - oz) / cz);
-    if (i < 0 || j < 0 || k < 0 || i >= nx || j >= ny || k >= nz) return -1;
-    return idx(i, j, k);
-  };
-  const at = (x, y, z) => { const q = cellOf(x, y, z); return q < 0 ? 0 : G[q]; };
-  const entryAt = (x, y, z) => { const q = cellOf(x, y, z); if (q < 0 || G[q] !== 2) return null; return byId.get(comp[q])?.entry ?? null; };
-  const filled = comps.filter((c) => c.entry);
+  // 残すのは 1 格子 1 バイトの 2 枚だけ: G(0 外 / 1 部品 / 2 媒質の入った空洞)と C(空洞の番号 + 1。0 = 空洞でない)
+  // (つながりの番号 comp は Int32 で 4 バイト/格子あり、Worker ごとに持つと重いので捨てる)
+  const CN = new Uint8Array(G.length);
+  for (let q = 0; q < G.length; q++) {
+    const n = comp[q] >= 0 ? realIndex.get(comp[q]) : undefined;
+    if (n === undefined || n > 254) { if (comp[q] >= 0) G[q] = 0; continue; }
+    CN[q] = n + 1; G[q] = comps[n].entry ? 2 : 0;
+  }
   const used = new Set(comps.map((c) => c.assign).filter((x) => x >= 0));
   const unmatched = (cavPart.assign ?? []).map((_, i) => i).filter((i) => !used.has(i));
-  return { comps, unmatched, entry: filled[0]?.entry ?? null, volume: filled.reduce((a, c) => a + c.volume, 0), cell, cz, at, entryAt, grid: { G, o, nx, ny, nz, cz } };
+  return cavityFromData({ G, C: CN, o, nx, ny, nz, cell, cz, comps: comps.map(({ entry, ...c }) => c), unmatched });
+}
+
+/**
+ * 空洞の格子と一覧から、追跡で使う形(at・entryAt・媒質の entry)を作る。
+ * buildCavity の結果を Worker へ渡すときもこれで復元する(Worker で作り直さない。格子は 2 バイト/格子)
+ */
+export function cavityFromData(d) {
+  const { G, C, o, nx, ny, nz, cell, cz } = d;
+  const comps = d.comps.map((c) => ({ ...c, entry: c.material && c.material.type !== 'air' ? { part: { id: `cavity${c.index}`, name: `空洞 ${c.index + 1}`, material: c.material, coatings: {} }, kind: 'cavity' } : null }));
+  const cellOf = (x, y, z) => {
+    const i = Math.floor((x - o[0]) / cell), j = Math.floor((y - o[1]) / cell), k = Math.floor((z - o[2]) / cz);
+    if (i < 0 || j < 0 || k < 0 || i >= nx || j >= ny || k >= nz) return -1;
+    return (k * ny + j) * nx + i;
+  };
+  const at = (x, y, z) => { const q = cellOf(x, y, z); return q < 0 ? 0 : G[q]; };
+  const entryAt = (x, y, z) => { const q = cellOf(x, y, z); if (q < 0 || G[q] !== 2) return null; return comps[C[q] - 1]?.entry ?? null; };
+  const filled = comps.filter((c) => c.entry);
+  return { comps, unmatched: d.unmatched ?? [], entry: filled[0]?.entry ?? null, volume: filled.reduce((a, c) => a + c.volume, 0), cell, cz, at, entryAt, grid: { G, C, o, nx, ny, nz, cz },
+    /** Worker へ渡す形(関数・entry を含まない) */
+    data: () => ({ G, C, o, nx, ny, nz, cell, cz, comps: d.comps, unmatched: d.unmatched ?? [] }) };
 }
 
 /** 部品の位置(STL は offset、回転体は zOffset) */

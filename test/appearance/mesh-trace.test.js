@@ -206,3 +206,21 @@ test('a gap closed only by passage sealing is marked sealed: the default medium 
   const cl = buildTraceScene([revPart(cup), revPart(rect(0, 10, 3, 5)), { id: 'c', kind: 'cavity', material: oil, seal: 0.5 }]);
   assert.ok(cl.cavity.comps.every((c) => c.sealed === false) && cl.cavity.comps[0].material === oil);
 });
+
+test('cavity data built once can be passed (structured clone, as to a worker) and gives the same media without rebuilding', () => {
+  const pu = { type: 'model', nd: 1.5, vd: 50 };
+  const lid = { start: [0, 3.55], segments: [{ type: 'line', to: [6, 3.55] }, { type: 'line', to: [6, 3.05] }, { type: 'line', to: [10, 3.05] }, { type: 'line', to: [10, 5] }, { type: 'line', to: [0, 5] }, { type: 'line', to: [0, 3.55] }] };
+  const parts = [revPart(cup), revPart(rect(0, 10, 3, 3.05), pu), revPart(lid)];
+  const cav = { id: 'cav', kind: 'cavity', material: { type: 'air' }, materials: { 0: oil }, seal: 0 };
+  let t = Date.now();
+  const a = buildTraceScene([...parts, cav]);
+  const tBuild = Date.now() - t;
+  const data = structuredClone(a.cavity.data());
+  assert.ok(data.G instanceof Uint8Array && data.C instanceof Uint8Array && data.G.length === data.C.length);
+  t = Date.now();
+  const b = buildTraceScene([...parts, { ...cav, data }]);
+  const tReuse = Date.now() - t;
+  assert.ok(tReuse < tBuild, `reuse ${tReuse} ms vs build ${tBuild} ms`);
+  for (const sc of [a, b]) assert.equal(chain(transmitPath(sc, [0.3, 0.2, -5], [0, 0, 1], 0.55).events), chain(transmitPath(a, [0.3, 0.2, -5], [0, 0, 1], 0.55).events));
+  assert.deepEqual(b.cavity.comps.map((c) => [c.volume, c.material]), a.cavity.comps.map((c) => [c.volume, c.material]));
+});

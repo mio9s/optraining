@@ -62,8 +62,18 @@ export function initAppearance({ getSystem, getState, setState, onLoadSystem }) 
     const on = c && ((c.material && c.material.type !== 'air') || c.detect || (c.assign ?? []).some((a) => a.material?.type !== 'air'));
     return on ? { id: 'cavity', kind: 'cavity', material: c.material ?? { type: 'air' }, assign: c.assign ?? [], seal: c.seal ?? 0, detect: !!c.detect } : null;
   }
-  function sceneParts() { const cp = cavityPart(); return [...st.parts.filter((p) => p.visible !== false), ...(cp ? [cp] : [])]; }
-  let lastScene = null;
+  let lastScene = null, lastSceneKey = '';
+  /** 形と空洞の設定を表す鍵(メッシュの頂点データは識別子だけ) */
+  const geomKey = (parts) => JSON.stringify(parts, (k, v) => (k === 'mesh' && v?.key ? v.key : k === 'data' ? undefined : v));
+  /**
+   * 描画・解析に渡す部品。空洞の格子は画面で 1 回だけ作り(faceList)、形と設定が同じ間はその結果を Worker に渡す
+   * (Worker ごとに作り直すと、格子 1 千万個の空洞で 1 つあたり約 80 MB を持つため)
+   */
+  function sceneParts() {
+    const cp = cavityPart(), parts = [...st.parts.filter((p) => p.visible !== false), ...(cp ? [cp] : [])];
+    if (cp && lastScene?.cavity && lastSceneKey === geomKey(parts)) cp.data = { ...lastScene.cavity.data(), key: lastSceneKey };
+    return parts;
+  }
   /** 最後に取り込んだ STL の座標系(なければ部品の値から) */
   function lastFrame() {
     if (st.stlFrame) return st.stlFrame;
@@ -599,8 +609,9 @@ export function initAppearance({ getSystem, getState, setState, onLoadSystem }) 
   // ---------- 数値: 反射率 ----------
   function faceList() {
     const out = [];
-    const scene = buildTraceScene(sceneParts());
-    lastScene = scene; showCavityInfo(scene);
+    const sp = sceneParts();
+    const scene = buildTraceScene(sp);
+    lastScene = scene; lastSceneKey = geomKey(sp); showCavityInfo(scene);
     st.parts.forEach((p) => {
       if (p.visible === false || p.material.type === 'opaque') return;
       if (isMesh(p)) { out.push({ part: p, seg: 0, label: `${p.name} 表面(STL、空気との界面として表示)`, outside: { type: 'air' } }); return; }
