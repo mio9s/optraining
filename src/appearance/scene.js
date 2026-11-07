@@ -84,7 +84,8 @@ const meshCache = new Map();
 export function meshData(p) {
   const key = p.mesh.key ?? p.id;
   let m = meshCache.get(key);
-  if (!m) { m = decodeMesh(p.mesh); meshCache.set(key, m); }
+  // 取り込み直すたびに増えないよう上限を付ける(消えたものは次に使うとき復元し直す)
+  if (!m) { if (meshCache.size > 16) meshCache.clear(); m = decodeMesh(p.mesh); meshCache.set(key, m); }
   return m;
 }
 export const isMesh = (p) => p.kind === 'mesh';

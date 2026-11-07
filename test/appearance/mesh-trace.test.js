@@ -166,3 +166,92 @@ test('two cavities separated by a 50 µm membrane get their own media (oil below
   const r = transmitPath(sc, [0.3, 0.2, -5], [0, 0, 1], 0.55);
   assert.equal(chain(r.events), `1.000>${nB} ${nB}>${nO} ${nO}>${nP} ${nP}>1.000 1.000>${nB} ${nB}>1.000`);
 });
+
+test('cavity media assigned via cavityAnchor follow the parts when they are moved; absolute points are reported as unmatched', async () => {
+  const { cavityAnchor } = await import('../../src/appearance/nstrace.js');
+  const pu = { type: 'model', nd: 1.5, vd: 50 };
+  const lid = { start: [0, 3.55], segments: [{ type: 'line', to: [6, 3.55] }, { type: 'line', to: [6, 3.05] }, { type: 'line', to: [10, 3.05] }, { type: 'line', to: [10, 5] }, { type: 'line', to: [0, 5] }, { type: 'line', to: [0, 3.55] }] };
+  const mk = (dz, dx) => [meshPart(revolveTris(cup, 64)), meshPart(revolveTris(rect(0, 10, 3, 3.05), 64), pu), meshPart(revolveTris(lid, 64))].map((p) => ({ ...p, offset: [dx, 0, dz] }));
+  const base = mk(0, 0), detect = { id: 'cav', kind: 'cavity', material: { type: 'air' }, detect: true, seal: 0 };
+  const s0 = buildTraceScene([...base, detect]);
+  const oilCav = s0.cavity.comps.find((c) => c.centroid[2] < 3);
+  const anchored = { ...cavityAnchor(s0, oilCav.seed), material: oil };
+  assert.ok(anchored.part, 'anchored to a part');
+  const absolute = { at: [...oilCav.seed], material: oil };
+  for (const [dz, dx] of [[0, 0], [7, 0], [0, 15], [-4, 6]]) {
+    // 部品をそれぞれ同じ量だけ動かす(STL の位置ダイアログと同じ)。部品の id は同じ
+    const moved = mk(dz, dx).map((p, i) => ({ ...p, id: base[i].id, mesh: base[i].mesh }));
+    const sc = buildTraceScene([...moved, { ...detect, assign: [anchored, absolute] }]);
+    const lower = sc.cavity.comps.find((c) => c.centroid[2] < 3 + dz), upper = sc.cavity.comps.find((c) => c.centroid[2] > 3 + dz);
+    assert.equal(lower.material, oil, `moved ${dz},${dx}`);
+    assert.equal(lower.assign, 0); // 画面が読む「どの指定が当たったか」も同じ
+    assert.equal(upper.material.type, 'air');
+    assert.deepEqual(sc.cavity.unmatched, [1]); // 絶対位置の指定は、動かす前は同じ空洞に重なり(先の指定が優先)、動かした後は外れる。どちらも使われない
+  }
+});
+
+test('a gap closed only by passage sealing is marked sealed: the default medium does not fill it, an explicit choice does', async () => {
+  const { cavityAnchor } = await import('../../src/appearance/nstrace.js');
+  // 2 枚の板の間に 0.2 mm の隙間。外周で外とつながっている(ふさぐ幅 0.5 mm なら閉じた扱い)
+  const parts = [revPart(rect(0, 10, 0, 2)), revPart(rect(0, 10, 2.2, 4))];
+  assert.equal(buildTraceScene([...parts, { id: 'c', kind: 'cavity', material: oil, seal: 0 }]).cavity.comps.length, 0);
+  const sc = buildTraceScene([...parts, { id: 'c', kind: 'cavity', material: oil, seal: 0.5 }]);
+  assert.equal(sc.cavity.comps.length, 1);
+  assert.equal(sc.cavity.comps[0].sealed, true);
+  assert.equal(sc.cavity.comps[0].material.type, 'air'); // 既定のオイルは入らない
+  const a = { ...cavityAnchor(sc, sc.cavity.comps[0].seed), material: oil };
+  const sc2 = buildTraceScene([...parts, { id: 'c', kind: 'cavity', material: { type: 'air' }, seal: 0.5, assign: [a] }]);
+  assert.equal(sc2.cavity.comps[0].material, oil);
+  // 完全に閉じた空洞(カップとふた)は sealed でない
+  const cl = buildTraceScene([revPart(cup), revPart(rect(0, 10, 3, 5)), { id: 'c', kind: 'cavity', material: oil, seal: 0.5 }]);
+  assert.ok(cl.cavity.comps.every((c) => c.sealed === false) && cl.cavity.comps[0].material === oil);
+});
+
+test('cavity data built once can be passed (structured clone, as to a worker) and gives the same media without rebuilding', () => {
+  const pu = { type: 'model', nd: 1.5, vd: 50 };
+  const lid = { start: [0, 3.55], segments: [{ type: 'line', to: [6, 3.55] }, { type: 'line', to: [6, 3.05] }, { type: 'line', to: [10, 3.05] }, { type: 'line', to: [10, 5] }, { type: 'line', to: [0, 5] }, { type: 'line', to: [0, 3.55] }] };
+  const parts = [revPart(cup), revPart(rect(0, 10, 3, 3.05), pu), revPart(lid)];
+  const cav = { id: 'cav', kind: 'cavity', material: { type: 'air' }, materials: { 0: oil }, seal: 0 };
+  let t = Date.now();
+  const a = buildTraceScene([...parts, cav]);
+  const tBuild = Date.now() - t;
+  const data = structuredClone(a.cavity.data());
+  assert.ok(data.G instanceof Uint8Array && data.C instanceof Uint8Array && data.G.length === data.C.length);
+  t = Date.now();
+  const b = buildTraceScene([...parts, { ...cav, data }]);
+  const tReuse = Date.now() - t;
+  assert.ok(tReuse < tBuild, `reuse ${tReuse} ms vs build ${tBuild} ms`);
+  for (const sc of [a, b]) assert.equal(chain(transmitPath(sc, [0.3, 0.2, -5], [0, 0, 1], 0.55).events), chain(transmitPath(a, [0.3, 0.2, -5], [0, 0, 1], 0.55).events));
+  assert.deepEqual(b.cavity.comps.map((c) => [c.volume, c.material]), a.cavity.comps.map((c) => [c.volume, c.material]));
+});
+
+test('contact tolerance: revolved plates 1 µm apart keep their air gap; an STL/revolved contact merges whichever comes first', () => {
+  const nB = refractiveIndex(bk7, 0.55).toFixed(3);
+  const far = meshPart(boxTris(30, 40, 30, 40, 0, 2)); // 光線の通らない STL(シーンに 2 µm の許容差を持ち込む)
+  const sc = buildTraceScene([revPart(rect(0, 10, 0, 2)), revPart(rect(0, 10, 2.001, 4)), far]);
+  assert.equal(chain(transmitPath(sc, [1, 1, -5], [0, 0, 1], 0.55).events), `1.000>${nB} ${nB}>1.000 1.000>${nB} ${nB}>1.000`);
+  // STL と回転体の接触(1 µm のずれ)は、どちらが光の手前でも 1 つの界面にまとめる(空気層を作らない)
+  for (const [a, b] of [[revPart(rect(0, 12, 0, 3)), meshPart(boxTris(-8, 8, -8, 8, 3.001, 5), oil)], [meshPart(boxTris(-8, 8, -8, 8, 0, 3), oil), revPart(rect(0, 12, 3.001, 5))]]) {
+    const ev = transmitPath(buildTraceScene([a, b]), [1, 1, -5], [0, 0, 1], 0.55).events;
+    assert.equal(ev.length, 3, chain(ev));
+    assert.ok(ev[1].before && ev[1].after, 'contact face is part/part, no air');
+  }
+});
+
+test('more than 255 cavities: the largest 255 are kept, the rest are counted as overflow and are air in both the list and the trace', () => {
+  // 17 × 17 = 289 個の小さな閉じた箱(壁 0.4 mm、中は 0.6 mm 角)を 1 つのメッシュにする
+  const tris = [];
+  for (let i = 0; i < 17; i++) for (let j = 0; j < 17; j++) {
+    const x = i * 1.4, y = j * 1.4, s = i === 0 && j === 0 ? 1.2 : 0.6; // 1 つだけ大きい(必ず残る)
+    tris.push(...boxTris(x, x + 1.4, y, y + 1.4, 0, 1.4)); // 外側
+    const inner = boxTris(x + 0.4, x + 0.4 + s * 0.5 + 0.1, y + 0.4, y + 0.4 + s * 0.5 + 0.1, 0.4, 1.0);
+    for (let k = 0; k < inner.length; k += 9) tris.push(...inner.slice(k, k + 3), ...inner.slice(k + 6, k + 9), ...inner.slice(k + 3, k + 6)); // 内向き(穴)
+  }
+  const { bodies } = importSTL(toBinarySTL(Float32Array.from(tris)), { split: false });
+  const part = { id: 'grid', name: 'grid', kind: 'mesh', mesh: { key: 'grid289', ...encodeMesh(bodies[0]) }, material: bk7, coatings: {}, offset: [0, 0, 0], visible: true, contactTol: 0.0001 };
+  const sc = buildTraceScene([part, { id: 'c', kind: 'cavity', material: oil, seal: 0 }]);
+  assert.equal(sc.cavity.comps.length + sc.cavity.overflow, 289);
+  assert.equal(sc.cavity.comps.length, 255);
+  // 一覧に出る空洞はどれも追跡でもオイル(entryAt が同じものを返す)
+  for (const c of sc.cavity.comps) assert.equal(sc.cavity.entryAt(...c.seed)?.part.material, oil);
+});

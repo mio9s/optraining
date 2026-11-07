@@ -7,10 +7,9 @@ on:
     paths: ['dist/**', '.github/workflows/pages.yml']
   workflow_dispatch:
 
+# 既定は読み取りだけ。公開の権限は deploy ジョブにだけ渡す(依存を入れて走らせるテストには渡さない)
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: pages
@@ -19,23 +18,14 @@ concurrency:
 jobs:
   # テストと dist の一致を確かめてから公開する(失敗したコミットは公開しない)
   test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-      - run: npm test
-      - name: dist/ is up to date
-        run: |
-          npm run build
-          git diff --exit-code -- dist/ || { echo '::error::dist/optraining.html がソースと一致しません'; exit 1; }
+    uses: ./.github/workflows/test.yml
 
   deploy:
     needs: test
     runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

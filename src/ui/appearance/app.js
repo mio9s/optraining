@@ -9,7 +9,7 @@ import { tessellate, bounds, segmentEvaluator } from '../../appearance/profile.j
 import { COATINGS } from '../../appearance/thinfilm.js';
 import { ENV_PRESETS, defaultCamera, internalVisibility, cameraBasis } from '../../appearance/render.js';
 import { reflectanceVsAngle, reflectanceVsWavelength, lineProfile, boundaryContrast, contributionTable } from '../../appearance/analysis.js';
-import { buildTraceScene } from '../../appearance/nstrace.js';
+import { buildTraceScene, cavityAnchor } from '../../appearance/nstrace.js';
 import { listPresets, refractiveIndex } from '../../core/glass.js';
 import { parseNumber } from '../editor.js';
 import { createPool, createRenderView, renderStill, drawBuffer } from './render-view.js';
@@ -62,8 +62,18 @@ export function initAppearance({ getSystem, getState, setState, onLoadSystem }) 
     const on = c && ((c.material && c.material.type !== 'air') || c.detect || (c.assign ?? []).some((a) => a.material?.type !== 'air'));
     return on ? { id: 'cavity', kind: 'cavity', material: c.material ?? { type: 'air' }, assign: c.assign ?? [], seal: c.seal ?? 0, detect: !!c.detect } : null;
   }
-  function sceneParts() { const cp = cavityPart(); return [...st.parts.filter((p) => p.visible !== false), ...(cp ? [cp] : [])]; }
-  let lastScene = null;
+  let lastScene = null, lastSceneKey = '';
+  /** 形と空洞の設定を表す鍵(メッシュの頂点データは識別子だけ) */
+  const geomKey = (parts) => JSON.stringify(parts, (k, v) => (k === 'mesh' && v?.key ? v.key : k === 'data' ? undefined : v));
+  /**
+   * 描画・解析に渡す部品。空洞の格子は画面で 1 回だけ作り(faceList)、形と設定が同じ間はその結果を Worker に渡す
+   * (Worker ごとに作り直すと、格子 1 千万個の空洞で 1 つあたり約 80 MB を持つため)
+   */
+  function sceneParts() {
+    const cp = cavityPart(), parts = [...st.parts.filter((p) => p.visible !== false), ...(cp ? [cp] : [])];
+    if (cp && lastScene?.cavity && lastSceneKey === geomKey(parts)) cp.data = { ...lastScene.cavity.data(), key: lastSceneKey };
+    return parts;
+  }
   /** 最後に取り込んだ STL の座標系(なければ部品の値から) */
   function lastFrame() {
     if (st.stlFrame) return st.stlFrame;
@@ -478,26 +488,36 @@ export function initAppearance({ getSystem, getState, setState, onLoadSystem }) 
     const comps = scene?.cavity?.comps ?? [];
     if (!st.cavity.detect || !comps.length) return;
     const assign = st.cavity.assign ?? (st.cavity.assign = []);
-    const findA = (c) => assign.findIndex((a) => Math.hypot(...a.at.map((v, k) => v - c.centroid[k])) < 0.5);
+    // どの空洞にどの指定が当たったかは追跡の計算(buildCavity)が決めた comps[].assign をそのまま使う(画面で別に判定しない)
     comps.forEach((c, n) => {
-      const ai = findA(c), cur = ai >= 0 ? assign[ai].material : null;
+      const cur = c.assign >= 0 ? assign[c.assign].material : null;
       box.append(h('div', { class: 'ap-cav-row' },
-        h('span', {}, `空洞 ${n + 1}: ${fmt(c.volume, 1)} mm³、光軸方向 z ≈ ${fmt(c.centroid[2], 2)} mm`),
+        h('span', { title: c.sealed ? '細い通路で外とつながっている隙間を、ふさいだとみなして閉じた空洞です。既定の媒質は入らないので、液体を入れるならここで選んでください' : null },
+          `空洞 ${n + 1}: ${fmt(c.volume, 1)} mm³、光軸方向 z ≈ ${fmt(c.centroid[2], 2)} mm${c.sealed ? '(細い通路をふさいで閉じた。既定は空気)' : ''}`),
         mediumSelect(cur, (m) => {
-          const i = findA(c);
-          if (m === null) { if (i >= 0) assign.splice(i, 1); } else if (i >= 0) assign[i].material = m; else assign.push({ at: c.centroid.map((v) => +v.toFixed(4)), material: m });
+          if (c.assign >= 0) { if (m === null) assign.splice(c.assign, 1); else assign[c.assign].material = m; }
+          else if (m !== null) assign.push({ ...cavityAnchor(scene, c.seed), material: m });
           changed(true);
         }, true)));
     });
+    if (scene.cavity.overflow) box.append(h('div', { class: 'warn' }, `空洞が多すぎるため、小さい方の ${scene.cavity.overflow} 個は数えず空気として扱っています(扱えるのは 255 個まで)。`));
+    const lost = scene.cavity.unmatched ?? [];
+    if (lost.length) box.append(h('div', { class: 'warn' }, `空洞の媒質の指定のうち ${lost.length} 件が、どの空洞にも当たっていません(部品を動かしたか、形が変わったため)。`,
+      h('button', { type: 'button', class: 'secondary', onclick: () => { st.cavity.assign = assign.filter((_, i) => !lost.includes(i)); changed(true); } }, '当たっていない指定を消す')));
   }
+
   function showCavityInfo(scene) {
     const el = $('ap-cav-info');
     if (!el) return;
     renderCavityList(scene);
+    // 空洞が 255 個を超えたときは、一覧を出していなくても知らせる(小さい方を黙って空気にしない)
+    const over = scene.cavity?.overflow ? `(空洞が多すぎるため、小さい方の ${scene.cavity.overflow} 個は数えず空気として扱っています。扱えるのは 255 個まで)` : '';
     if (!cavityPart()) { el.textContent = '空洞は周囲と同じ空気として扱っています。液体を封入したレンズなどは媒質を選ぶか、「空洞ごとに選ぶ」をオンにしてください。'; el.classList.remove('warn'); return; }
     const c = scene.cavity;
-    if (c?.comps?.length && st.cavity.detect) { el.textContent = `閉じた空洞を ${c.comps.length} 個見つけました(判定の格子 横 ${fmt(c.cell, 3)} mm・光軸方向 ${fmt(c.cz, 3)} mm)。上の一覧で空洞ごとに媒質を選べます。断面図に液体・ガラスの空洞を色で表示します。`; el.classList.remove('warn'); }
-    else if (c?.entry) { el.textContent = `閉じた空洞を見つけました: 体積 ${fmt(c.volume, 1)} mm³(判定の格子 ${fmt(c.cell, 3)} mm)。断面図に媒質の色で表示しています。`; el.classList.remove('warn'); }
+    const sealedDefault = (c?.comps ?? []).filter((x) => x.sealed && x.assign < 0 && st.cavity.material?.type !== 'air').length;
+    if (sealedDefault) { el.textContent = `空洞 ${c.comps.length} 個のうち ${sealedDefault} 個は、細い通路をふさいだことで閉じた空洞です(部品の縁と膜の間の隙間などを含むため、既定の媒質は入れず空気のままにしています)。液体を入れる空洞は「空洞ごとに選ぶ」で個別に選んでください。${over}`; el.classList.add('warn'); }
+    else if (c?.comps?.length && st.cavity.detect) { el.textContent = `閉じた空洞を ${c.comps.length} 個見つけました(判定の格子 横 ${fmt(c.cell, 3)} mm・光軸方向 ${fmt(c.cz, 3)} mm)。上の一覧で空洞ごとに媒質を選べます。断面図に液体・ガラスの空洞を色で表示します。${over}`; el.classList.remove('warn'); }
+    else if (c?.entry) { el.textContent = `閉じた空洞を見つけました: 体積 ${fmt(c.volume, 1)} mm³(判定の格子 ${fmt(c.cell, 3)} mm)。断面図に媒質の色で表示しています。${over}`; el.classList.remove('warn'); }
     else { el.textContent = '閉じた空洞が見つかりません。注入口などの細い通路で外とつながっている場合は「細い通路をふさぐ幅」をその通路の幅より少し大きくしてください。'; el.classList.add('warn'); }
   }
 
@@ -592,8 +612,9 @@ export function initAppearance({ getSystem, getState, setState, onLoadSystem }) 
   // ---------- 数値: 反射率 ----------
   function faceList() {
     const out = [];
-    const scene = buildTraceScene(sceneParts());
-    lastScene = scene; showCavityInfo(scene);
+    const sp = sceneParts();
+    const scene = buildTraceScene(sp);
+    lastScene = scene; lastSceneKey = geomKey(sp); showCavityInfo(scene);
     st.parts.forEach((p) => {
       if (p.visible === false || p.material.type === 'opaque') return;
       if (isMesh(p)) { out.push({ part: p, seg: 0, label: `${p.name} 表面(STL、空気との界面として表示)`, outside: { type: 'air' } }); return; }
