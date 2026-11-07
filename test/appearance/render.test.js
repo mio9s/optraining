@@ -1,0 +1,107 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { renderImage, cameraBasis } from '../../src/appearance/render.js';
+import { rect } from '../../src/appearance/scene.js';
+import { refractiveIndex } from '../../src/core/glass.js';
+import { fresnel } from '../../src/core/fresnel.js';
+import { cmf, LAMBDA_MIN, LAMBDA_MAX, spectralToRGB } from '../../src/appearance/color.js';
+import { thinFilm, COATINGS } from '../../src/appearance/thinfilm.js';
+
+const bk7 = { type: 'preset', name: 'N-BK7' };
+const part = (id, profile, coatings = {}, material = bk7) => ({ id, name: id, profile, material, coatings, visible: true });
+// カメラ側(−z)の半球だけが白い環境: 写るのは反射光のみ
+const halfWhite = { type: 'fn', fn: (d) => (d[2] < 0 ? 1 : 0) };
+const view = { camera: { target: [0, 0, 2.5], azimuth: 0, elevation: 0, distance: 60, fov: 4 }, env: halfWhite, width: 4, height: 4 };
+const mean = (a) => a.reduce((s, v) => s + v, 0) / a.length;
+
+test('camera at az=0, el=0 looks along +z from the object side', () => {
+  const cb = cameraBasis({ target: [0, 0, 10], azimuth: 0, elevation: 0, distance: 50, fov: 30 });
+  assert.ok(Math.abs(cb.pos[2] + 40) < 1e-9 && Math.abs(cb.fwd[2] - 1) < 1e-12);
+});
+test('uncoated BK7 window: reflected luminance = 2R/(1+R) (incl. multiple reflections) within 2 %', () => {
+  const img = renderImage([part('w', rect(0, 15, 0, 5))], { ...view, passes: 64 });
+  // 期待値: 輝度重み付きの波長平均
+  let num = 0, den = 0;
+  for (let l = LAMBDA_MIN; l <= LAMBDA_MAX; l += 1) {
+    const R = fresnel(1, refractiveIndex(bk7, l / 1000), 1).R, y = cmf(l)[1];
+    num += y * (2 * R) / (1 + R); den += y;
+  }
+  const expected = num / den, got = mean(img.y);
+  assert.ok(Math.abs(got / expected - 1) < 0.02, `got ${got} expected ${expected}`);
+  // 寄与: 前面の反射が最大、後面がそれに次ぐ
+  const keys = Object.entries(img.contrib).sort((a, b) => b[1] - a[1]);
+  assert.ok(keys.length >= 2);
+  const tot = Object.values(img.contrib).reduce((a, b) => a + b, 0) / 16;
+  assert.ok(Math.abs(tot / got - 1) < 1e-6); // 寄与の合計 = 画像の明るさ(反射光のみの環境)
+});
+test('index-matched cemented interface is invisible (zero reflection contribution, same image)', () => {
+  const single = renderImage([part('w', rect(0, 15, 0, 5))], { ...view, passes: 64 });
+  const cem = renderImage([part('a', rect(0, 15, 0, 2.5)), part('b', rect(0, 15, 2.5, 5))], { ...view, passes: 64 });
+  // 共有面(キーに '|' を含む)からの反射の寄与は 0(R = 0 なので記録自体がない)
+  const shared = Object.entries(cem.contrib).filter(([k, v]) => k.includes('|') && v > 0);
+  assert.equal(shared.length, 0);
+  assert.ok(Math.abs(mean(cem.y) / mean(single.y) - 1) < 0.005);
+});
+test('MgF2-coated reflection looks purple; uncoated is neutral', () => {
+  const ratio = (img) => { let r = 0, g = 0, b = 0; for (let i = 0; i < img.rgb.length; i += 3) { r += img.rgb[i]; g += img.rgb[i + 1]; b += img.rgb[i + 2]; } return { rb: (r + b) / 2 / g, r, g, b }; };
+  // 後面は黒い吸収体で覆い、前面の反射だけを見る
+  const absorber = part('abs', rect(0, 15, 5, 6), {}, { type: 'opaque', kind: 'absorber' });
+  const opts = { ...view, passes: 96 };
+  const plain = ratio(renderImage([part('w', rect(0, 15, 0, 5)), absorber], opts));
+  const coated = ratio(renderImage([part('w', rect(0, 15, 0, 5), { 0: 'mgf2' }), absorber], opts));
+  // 理論: 反射スペクトル R(λ) を等色関数で積分した色比
+  let c = [0, 0, 0];
+  for (let l = LAMBDA_MIN; l <= LAMBDA_MAX; l++) {
+    const R = thinFilm(1, COATINGS.mgf2.layers, refractiveIndex(bk7, l / 1000), 1, l / 1000).R;
+    c = c.map((v, k) => v + spectralToRGB(l, R)[k]);
+  }
+  const theory = (c[0] + c[2]) / 2 / c[1];
+  assert.ok(theory > 1.15); // 紫(青と赤が緑より強い)
+  assert.ok(Math.abs(plain.rb - 1) < 0.05, `plain ${plain.rb}`);
+  assert.ok(Math.abs(coated.rb / theory - 1) < 0.03, `coated ${coated.rb} theory ${theory}`);
+  assert.ok(coated.g < plain.g * 0.5); // 反射が大きく減る
+});
+import { internalVisibility } from '../../src/appearance/render.js';
+test('internal-interface comparison: matched interface → 0, mismatched → positive contrast', () => {
+  const opts = { ...view, passes: 32 };
+  const oilA = (nd) => [part('a', rect(0, 15, 0, 2.5)), part('b', rect(0, 15, 2.5, 5), {}, { type: 'model', nd, vd: 64.17 })];
+  for (const [nd, expectZero] of [[1.5168, true], [1.6, false]]) {
+    const parts = oilA(nd);
+    const a = renderImage(parts, opts), b = renderImage(parts, { ...opts, suppressInternal: true });
+    const v = internalVisibility(a, b);
+    if (expectZero) assert.ok(Math.abs(v.max) < 2e-3, String(v.max));
+    else {
+      // BK7/1.6 の界面: R ≈ ((1.6−1.5168)/(3.1168))² ≈ 7e-4、前面反射 4.2 % に比べて約 1.7 %
+      assert.ok(v.max > 0.005 && v.max < 0.05, String(v.max));
+    }
+  }
+});
+import { lensProfile } from '../../src/appearance/scene.js';
+test('bundled 16-wavelength mode agrees with exact per-wavelength mode (dispersive lens, coated)', () => {
+  // 分散の大きい N-SF11 の両凸レンズ(前面 MgF2 コート)を格子背景の前で斜めから見る
+  const lens = { id: 'L', name: 'L', profile: lensProfile(0, 20, 8, 6, -20, 8), material: { type: 'preset', name: 'N-SF11' }, coatings: { 0: 'mgf2' }, visible: true };
+  const opts = { camera: { target: [0, 0, 3], azimuth: 25, elevation: 10, distance: 60, fov: 22 }, env: { type: 'grid' }, width: 24, height: 18 };
+  const exact = renderImage([lens], { ...opts, passes: 64, exactSpectral: true });
+  const fast = renderImage([lens], { ...opts, passes: 4 });
+  const avg = (img, c) => { let s = 0; for (let i = c; i < img.rgb.length; i += 3) s += img.rgb[i]; return (3 * s) / img.rgb.length; };
+  for (const c of [0, 1, 2]) assert.ok(Math.abs(avg(fast, c) / avg(exact, c) - 1) < 0.03, `ch${c}: ${avg(fast, c)} vs ${avg(exact, c)}`);
+  // 画素ごとの差: 4 パスでは細い格子線の縁取り(サンプル位置)のノイズが主。同じパス数まで重ねれば差は正確モード自身のノイズ以下
+  const rms = (a, b) => { let e = 0; for (let i = 0; i < a.rgb.length; i++) e += (a.rgb[i] - b.rgb[i]) ** 2; return Math.sqrt(e / a.rgb.length); };
+  const fast64 = renderImage([lens], { ...opts, passes: 64 });
+  const exact128 = renderImage([lens], { ...opts, passes: 128, exactSpectral: true });
+  assert.ok(rms(fast64, exact128) <= rms(exact, exact128) * 1.2, `fast64 ${rms(fast64, exact128)} vs exact64 noise ${rms(exact, exact128)}`);
+});
+test('grid panel: lines are straight outside the lens (no lens → straight, evenly spaced)', async () => {
+  const { gridPanel } = await import('../../src/appearance/render.js');
+  // 何もない場面: 画面の各行で、縦線の位置が行によらず同じ(直線)
+  const cam = { target: [0, 0, 0], azimuth: 30, elevation: 20, distance: 100, fov: 30 };
+  const img = renderImage([], { camera: cam, env: { type: 'grid' }, width: 96, height: 72, passes: 1 });
+  const darkCols = (row) => { const out = []; for (let x = 0; x < 96; x++) if (img.y[row * 96 + x] < 0.3) out.push(x); return out; };
+  const firstEdges = (cols) => cols.filter((x, i) => i === 0 || cols[i - 1] !== x - 1);
+  const rows = [10, 30, 60].map((r) => firstEdges(darkCols(r)));
+  // 横線に当たった行は除外し、縦線の位置を比較
+  const vert = rows.filter((r) => r.length >= 2 && r.length <= 12);
+  assert.ok(vert.length >= 2);
+  for (const r of vert) assert.deepEqual(r, vert[0]);
+  assert.ok(gridPanel({ type: 'room' }, null, cam, {}).type === 'room');
+});

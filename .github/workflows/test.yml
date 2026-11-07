@@ -1,0 +1,31 @@
+# テストを走らせ、dist/optraining.html がソースから作り直したものと一致するか確かめる
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: dist/ is up to date
+        run: |
+          npm run build
+          git diff --exit-code -- dist/ || { echo '::error::dist/optraining.html がソースと一致しません。npm run build の結果をコミットしてください'; exit 1; }

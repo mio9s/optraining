@@ -70,7 +70,7 @@
 | 外観の判定 | 線上の明るさから背景の傾きを直線(Theil–Sen)で除き、最大のずれをウェーバーコントラストで評価。画像ノイズの 4 倍未満は「判定できません」 |
 | 薄膜 | 特性行列法(s・p、多層、全反射・エバネッセント結合を含む)。厚い層(接着剤 25 µm など)は部品として扱い、白色光では非干渉 |
 
-詳細は `docs/superpowers/specs/2026-11-04-optical-simulator-design.md` §6.1。
+詳細は `docs/specs/2026-11-04-optical-simulator-design.md` §6.1。
 
 ## 検証
 
@@ -92,7 +92,32 @@ npm run build     # dist/optraining.html を生成
 npm run import-glass  # ガラスデータを再取り込み(通常不要)
 ```
 
-構成: `src/core/`(DOM に依存しない物理計算)、`src/ui/`(画面)、`scripts/build.mjs`(esbuild でバンドルし 1 つの HTML にインライン化。重い計算は Web Worker)。
+`main` への push と pull request では、GitHub Actions がテストを走らせ、`dist/optraining.html` がソースから作り直したものと一致するかを確かめます(`.github/workflows/test.yml`)。`dist/` が変わると、同じ確認が通ってから GitHub Pages へ公開します(`.github/workflows/pages.yml`)。
+
+### フォルダ構成
+
+```
+src/
+  core/          結像・収差モードの計算(DOM に依存しない): 光線追跡、近軸、PSF、波面、迷光、ガラスデータ
+  appearance/    外観モードの計算: 断面・STL メッシュ、非逐次追跡、空洞、描画、薄膜、レンズデータへの変換
+  ui/            画面(結像モード)と共通部品
+    appearance/  外観モードの画面(部品、STL 取り込み、描画ビュー)
+  index.html, styles.css
+test/
+  core/ appearance/ ui/   src/ と同じ分け方の単体テスト(node:test)
+  helpers/       テスト用の形状・レンズ系
+  fixtures/      第三者実装(rayoptics)との比較用データ
+scripts/
+  build.mjs      esbuild でバンドルし 1 つの HTML にインライン化(重い計算は Web Worker)
+  import-glass.mjs  ガラスデータの取り込み
+  verify/        rayoptics との比較データの作り方
+examples/        読込…で開けるサンプル(特許 6831374 の液体レンズ)
+docs/
+  specs/         設計書
+  plans/         実装計画
+dist/            ビルド結果(optraining.html。GitHub Pages で公開)
+.github/workflows/  test.yml(テストと dist の一致の確認)、pages.yml(テスト後に公開)
+```
 
 ## ライセンス・出典
 

@@ -5,7 +5,7 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "test": "node --test test/*.test.js",
+    "test": "node --test \"test/**/*.test.js\"",
     "build": "node scripts/build.mjs",
     "import-glass": "node scripts/import-glass.mjs"
   },
