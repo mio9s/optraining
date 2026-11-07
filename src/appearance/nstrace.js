@@ -234,7 +234,12 @@ function buildCavity(scene, cavPart) {
   }
   // 小さすぎる空洞は、縁の丸め・部品の合わせ目の隙間とみなして除く(最大の空洞の 0.5 % 未満かつ 1 mm³ 未満)
   const vcell = cell * cell * cz, vmax = Math.max(0, ...info.map((c) => c.cells)) * vcell;
-  const real = info.filter((c) => c.cells * vcell >= Math.min(1, 0.005 * vmax) && c.cells * vcell > 1e-3).sort((a, b) => a.centroid[2] - b.centroid[2]);
+  let real = info.filter((c) => c.cells * vcell >= Math.min(1, 0.005 * vmax) && c.cells * vcell > 1e-3);
+  // 空洞の番号は格子に 1 バイトで持つので 255 個まで。超えたら体積の大きい順に残し、残りは空気として数だけ知らせる
+  // (一覧に出して計算で使わない、という食い違いを作らない)
+  let overflow = 0;
+  if (real.length > 255) { real.sort((a, b) => b.cells - a.cells); overflow = real.length - 255; real = real.slice(0, 255); }
+  real.sort((a, b) => a.centroid[2] - b.centroid[2]);
   // 空洞ごとの媒質(判定はここだけで行い、画面もこの結果 comps[].assign を使う):
   //   assign = [{part, local, material}] … 部品 part の位置(offset / zOffset)からの相対位置 local にある空洞。部品を動かすと一緒に動く
   //            [{at, material}]          … シーンの絶対位置(古い保存データ)
@@ -272,12 +277,12 @@ function buildCavity(scene, cavPart) {
   const CN = new Uint8Array(G.length);
   for (let q = 0; q < G.length; q++) {
     const n = comp[q] >= 0 ? realIndex.get(comp[q]) : undefined;
-    if (n === undefined || n > 254) { if (comp[q] >= 0) G[q] = 0; continue; }
+    if (n === undefined) { if (comp[q] >= 0) G[q] = 0; continue; }
     CN[q] = n + 1; G[q] = comps[n].entry ? 2 : 0;
   }
   const used = new Set(comps.map((c) => c.assign).filter((x) => x >= 0));
   const unmatched = (cavPart.assign ?? []).map((_, i) => i).filter((i) => !used.has(i));
-  return cavityFromData({ G, C: CN, o, nx, ny, nz, cell, cz, comps: comps.map(({ entry, ...c }) => c), unmatched });
+  return cavityFromData({ G, C: CN, o, nx, ny, nz, cell, cz, comps: comps.map(({ entry, ...c }) => c), unmatched, overflow });
 }
 
 /**
@@ -295,9 +300,9 @@ export function cavityFromData(d) {
   const at = (x, y, z) => { const q = cellOf(x, y, z); return q < 0 ? 0 : G[q]; };
   const entryAt = (x, y, z) => { const q = cellOf(x, y, z); if (q < 0 || G[q] !== 2) return null; return comps[C[q] - 1]?.entry ?? null; };
   const filled = comps.filter((c) => c.entry);
-  return { comps, unmatched: d.unmatched ?? [], entry: filled[0]?.entry ?? null, volume: filled.reduce((a, c) => a + c.volume, 0), cell, cz, at, entryAt, grid: { G, C, o, nx, ny, nz, cz },
+  return { comps, unmatched: d.unmatched ?? [], overflow: d.overflow ?? 0, entry: filled[0]?.entry ?? null, volume: filled.reduce((a, c) => a + c.volume, 0), cell, cz, at, entryAt, grid: { G, C, o, nx, ny, nz, cz },
     /** Worker へ渡す形(関数・entry を含まない) */
-    data: () => ({ G, C, o, nx, ny, nz, cell, cz, comps: d.comps, unmatched: d.unmatched ?? [] }) };
+    data: () => ({ G, C, o, nx, ny, nz, cell, cz, comps: d.comps, unmatched: d.unmatched ?? [], overflow: d.overflow ?? 0 }) };
 }
 
 /** 部品の位置(STL は offset、回転体は zOffset) */

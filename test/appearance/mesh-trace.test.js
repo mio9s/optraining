@@ -237,3 +237,21 @@ test('contact tolerance: revolved plates 1 µm apart keep their air gap; an STL/
     assert.ok(ev[1].before && ev[1].after, 'contact face is part/part, no air');
   }
 });
+
+test('more than 255 cavities: the largest 255 are kept, the rest are counted as overflow and are air in both the list and the trace', () => {
+  // 17 × 17 = 289 個の小さな閉じた箱(壁 0.4 mm、中は 0.6 mm 角)を 1 つのメッシュにする
+  const tris = [];
+  for (let i = 0; i < 17; i++) for (let j = 0; j < 17; j++) {
+    const x = i * 1.4, y = j * 1.4, s = i === 0 && j === 0 ? 1.2 : 0.6; // 1 つだけ大きい(必ず残る)
+    tris.push(...boxTris(x, x + 1.4, y, y + 1.4, 0, 1.4)); // 外側
+    const inner = boxTris(x + 0.4, x + 0.4 + s * 0.5 + 0.1, y + 0.4, y + 0.4 + s * 0.5 + 0.1, 0.4, 1.0);
+    for (let k = 0; k < inner.length; k += 9) tris.push(...inner.slice(k, k + 3), ...inner.slice(k + 6, k + 9), ...inner.slice(k + 3, k + 6)); // 内向き(穴)
+  }
+  const { bodies } = importSTL(toBinarySTL(Float32Array.from(tris)), { split: false });
+  const part = { id: 'grid', name: 'grid', kind: 'mesh', mesh: { key: 'grid289', ...encodeMesh(bodies[0]) }, material: bk7, coatings: {}, offset: [0, 0, 0], visible: true, contactTol: 0.0001 };
+  const sc = buildTraceScene([part, { id: 'c', kind: 'cavity', material: oil, seal: 0 }]);
+  assert.equal(sc.cavity.comps.length + sc.cavity.overflow, 289);
+  assert.equal(sc.cavity.comps.length, 255);
+  // 一覧に出る空洞はどれも追跡でもオイル(entryAt が同じものを返す)
+  for (const c of sc.cavity.comps) assert.equal(sc.cavity.entryAt(...c.seed)?.part.material, oil);
+});

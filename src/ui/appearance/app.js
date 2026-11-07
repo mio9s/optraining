@@ -500,6 +500,7 @@ export function initAppearance({ getSystem, getState, setState, onLoadSystem }) 
           changed(true);
         }, true)));
     });
+    if (scene.cavity.overflow) box.append(h('div', { class: 'warn' }, `空洞が多すぎるため、小さい方の ${scene.cavity.overflow} 個は数えず空気として扱っています(扱えるのは 255 個まで)。`));
     const lost = scene.cavity.unmatched ?? [];
     if (lost.length) box.append(h('div', { class: 'warn' }, `空洞の媒質の指定のうち ${lost.length} 件が、どの空洞にも当たっていません(部品を動かしたか、形が変わったため)。`,
       h('button', { type: 'button', class: 'secondary', onclick: () => { st.cavity.assign = assign.filter((_, i) => !lost.includes(i)); changed(true); } }, '当たっていない指定を消す')));
