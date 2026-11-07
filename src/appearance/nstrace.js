@@ -98,7 +98,7 @@ export function buildTraceScene(parts) {
 }
 
 // ---------- 閉じた空洞 ----------
-const CAV_N = 200, CAV_MAX = 1.6e7;
+const CAV_N = 200, CAV_MAX = 1.6e7, AIR = { type: 'air' };
 /** 3 次元の 0/1 配列を直方体(半径 rx, ry, rz 格子)で膨張(軸ごとの累積和で O(N)) */
 function dilateBox(M, nx, ny, nz, r) {
   let A = M;
@@ -139,7 +139,9 @@ function buildCavity(scene, cavPart) {
   // まず z 方向の光線で各列の界面を集める(列は xy の格子の中心)
   const dz = [0, 0, 1];
   const columns = (c) => {
-    const nx = Math.ceil((hi[0] - lo[0]) / c) + 4, ny = Math.ceil((hi[1] - lo[1]) / c) + 4, o = [lo[0] - 2 * c, lo[1] - 2 * c];
+    // 外周の余白は、通路をふさぐときの膨らみ(seal/2)より広くとる(狭いと、部品の外の角が外から切り離されて空洞に見える)
+    const pad = Math.max(2, Math.ceil(seal / 2 / c) + 3);
+    const nx = Math.ceil((hi[0] - lo[0]) / c) + 2 * pad, ny = Math.ceil((hi[1] - lo[1]) / c) + 2 * pad, o = [lo[0] - pad * c, lo[1] - pad * c];
     const cols = new Array(nx * ny);
     let thin = Infinity;
     for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
@@ -202,22 +204,32 @@ function buildCavity(scene, cavPart) {
     const back = dilateBox(seen, nx, ny, nz, r);
     for (let q = 0; q < G.length; q++) if (back[q] && !G[q]) seen[q] = 1;
   }
+  // ふさがずにたどった外(通路をふさいだから閉じたのか、もともと閉じているのかを分けるため)
+  let seen0 = null;
+  if (sealing) {
+    seen0 = new Uint8Array(G.length);
+    const push0 = (q) => { if (!G[q] && !seen0[q]) { seen0[q] = 1; stack.push(q); } };
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) { push0(idx(i, j, 0)); push0(idx(i, j, nz - 1)); }
+    for (let k = 0; k < nz; k++) { for (let i = 0; i < nx; i++) { push0(idx(i, 0, k)); push0(idx(i, ny - 1, k)); } for (let j = 0; j < ny; j++) { push0(idx(0, j, k)); push0(idx(nx - 1, j, k)); } }
+    flood((q) => !G[q], seen0, 1);
+  }
   // 空洞をつながりごとに分ける
   const comp = new Int32Array(G.length).fill(-1), info = [];
   for (let q = 0; q < G.length; q++) {
     if (G[q] || seen[q] || comp[q] >= 0) continue;
     const id = info.length;
     comp[q] = id; stack.push(q);
-    let n = 0, sz = 0, sx = 0, sy = 0;
+    let n = 0, sz = 0, sx = 0, sy = 0, sealed = false;
     const qi = q % nx, qj = ((q - qi) / nx) % ny, qk = Math.floor(q / (nx * ny));
     const seed = [o[0] + (qi + 0.5) * cell, o[1] + (qj + 0.5) * cell, oz + (qk + 0.5) * cz]; // 空洞の中にある点(重心は曲がった空洞の外に出ることがある)
     while (stack.length) {
       const u = stack.pop(), i = u % nx, j = ((u - i) / nx) % ny, k = Math.floor(u / (nx * ny));
       n++; sx += i; sy += j; sz += k;
+      if (seen0 && seen0[u]) sealed = true; // 通路をふさがなければ外とつながっている
       const nb = [i > 0 ? u - 1 : -1, i < nx - 1 ? u + 1 : -1, j > 0 ? u - nx : -1, j < ny - 1 ? u + nx : -1, k > 0 ? u - nx * ny : -1, k < nz - 1 ? u + nx * ny : -1];
       for (const w of nb) if (w >= 0 && !G[w] && !seen[w] && comp[w] < 0) { comp[w] = id; stack.push(w); }
     }
-    info.push({ id, cells: n, seed, centroid: [o[0] + (sx / n + 0.5) * cell, o[1] + (sy / n + 0.5) * cell, oz + (sz / n + 0.5) * cz] });
+    info.push({ id, cells: n, seed, sealed, centroid: [o[0] + (sx / n + 0.5) * cell, o[1] + (sy / n + 0.5) * cell, oz + (sz / n + 0.5) * cz] });
   }
   // 小さすぎる空洞は、縁の丸め・部品の合わせ目の隙間とみなして除く(最大の空洞の 0.5 % 未満かつ 1 mm³ 未満)
   const vcell = cell * cell * cz, vmax = Math.max(0, ...info.map((c) => c.cells)) * vcell;
@@ -226,7 +238,9 @@ function buildCavity(scene, cavPart) {
   //   assign = [{part, local, material}] … 部品 part の位置(offset / zOffset)からの相対位置 local にある空洞。部品を動かすと一緒に動く
   //            [{at, material}]          … シーンの絶対位置(古い保存データ)
   //   その点を含む空洞(点が空洞の格子の上になければ、まわり 2 格子以内の空洞)に当てる。見つからない指定は使わない(画面で知らせる)
-  //   materials = {番号: material} は z 順の番号に。どれもなければ既定の material(完全に閉じた空洞だけ)
+  //   materials = {番号: material} は z 順の番号に。どれもなければ既定の material。
+  //   既定は完全に閉じた空洞だけに使う。細い通路をふさいだから閉じた空洞(sealed)は、外とつながる隙間(部品の縁の丸みと膜の間など)も
+  //   含むので、個別に選んだときだけ媒質を変える(それ以外は空気)
   const byPart = new Map(scene.list.map((e) => [e.part.id, e.part]));
   const cellIdx = (x, y, z) => { const i = Math.floor((x - o[0]) / cell), j = Math.floor((y - o[1]) / cell), k = Math.floor((z - oz) / cz); return i < 0 || j < 0 || k < 0 || i >= nx || j >= ny || k >= nz ? -1 : idx(i, j, k); };
   const realIndex = new Map(real.map((c, n) => [c.id, n]));
@@ -248,8 +262,8 @@ function buildCavity(scene, cavPart) {
   });
   const comps = real.map((c, n) => {
     const ai = assigned.has(n) ? assigned.get(n) : -1;
-    const mat = ai >= 0 ? cavPart.assign[ai].material : cavPart.materials?.[n] ?? cavPart.material;
-    return { index: n, volume: c.cells * vcell, centroid: c.centroid, seed: c.seed, assign: ai, material: mat,
+    const mat = ai >= 0 ? cavPart.assign[ai].material : cavPart.materials?.[n] ?? (c.sealed ? AIR : cavPart.material);
+    return { index: n, volume: c.cells * vcell, centroid: c.centroid, seed: c.seed, sealed: c.sealed, assign: ai, material: mat,
       entry: mat && mat.type !== 'air' ? { part: { id: `cavity${n}`, name: `空洞 ${n + 1}`, material: mat, coatings: {} }, kind: 'cavity' } : null };
   });
   const byId = new Map(real.map((c, n) => [c.id, comps[n]]));

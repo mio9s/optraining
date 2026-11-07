@@ -189,3 +189,20 @@ test('cavity media assigned via cavityAnchor follow the parts when they are move
     assert.deepEqual(sc.cavity.unmatched, [1]); // 絶対位置の指定は、動かす前は同じ空洞に重なり(先の指定が優先)、動かした後は外れる。どちらも使われない
   }
 });
+
+test('a gap closed only by passage sealing is marked sealed: the default medium does not fill it, an explicit choice does', async () => {
+  const { cavityAnchor } = await import('../../src/appearance/nstrace.js');
+  // 2 枚の板の間に 0.2 mm の隙間。外周で外とつながっている(ふさぐ幅 0.5 mm なら閉じた扱い)
+  const parts = [revPart(rect(0, 10, 0, 2)), revPart(rect(0, 10, 2.2, 4))];
+  assert.equal(buildTraceScene([...parts, { id: 'c', kind: 'cavity', material: oil, seal: 0 }]).cavity.comps.length, 0);
+  const sc = buildTraceScene([...parts, { id: 'c', kind: 'cavity', material: oil, seal: 0.5 }]);
+  assert.equal(sc.cavity.comps.length, 1);
+  assert.equal(sc.cavity.comps[0].sealed, true);
+  assert.equal(sc.cavity.comps[0].material.type, 'air'); // 既定のオイルは入らない
+  const a = { ...cavityAnchor(sc, sc.cavity.comps[0].seed), material: oil };
+  const sc2 = buildTraceScene([...parts, { id: 'c', kind: 'cavity', material: { type: 'air' }, seal: 0.5, assign: [a] }]);
+  assert.equal(sc2.cavity.comps[0].material, oil);
+  // 完全に閉じた空洞(カップとふた)は sealed でない
+  const cl = buildTraceScene([revPart(cup), revPart(rect(0, 10, 3, 5)), { id: 'c', kind: 'cavity', material: oil, seal: 0.5 }]);
+  assert.ok(cl.cavity.comps.every((c) => c.sealed === false) && cl.cavity.comps[0].material === oil);
+});

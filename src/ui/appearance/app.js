@@ -482,7 +482,8 @@ export function initAppearance({ getSystem, getState, setState, onLoadSystem }) 
     comps.forEach((c, n) => {
       const cur = c.assign >= 0 ? assign[c.assign].material : null;
       box.append(h('div', { class: 'ap-cav-row' },
-        h('span', {}, `空洞 ${n + 1}: ${fmt(c.volume, 1)} mm³、光軸方向 z ≈ ${fmt(c.centroid[2], 2)} mm`),
+        h('span', { title: c.sealed ? '細い通路で外とつながっている隙間を、ふさいだとみなして閉じた空洞です。既定の媒質は入らないので、液体を入れるならここで選んでください' : null },
+          `空洞 ${n + 1}: ${fmt(c.volume, 1)} mm³、光軸方向 z ≈ ${fmt(c.centroid[2], 2)} mm${c.sealed ? '(細い通路をふさいで閉じた。既定は空気)' : ''}`),
         mediumSelect(cur, (m) => {
           if (c.assign >= 0) { if (m === null) assign.splice(c.assign, 1); else assign[c.assign].material = m; }
           else if (m !== null) assign.push({ ...cavityAnchor(scene, c.seed), material: m });
@@ -500,7 +501,9 @@ export function initAppearance({ getSystem, getState, setState, onLoadSystem }) 
     renderCavityList(scene);
     if (!cavityPart()) { el.textContent = '空洞は周囲と同じ空気として扱っています。液体を封入したレンズなどは媒質を選ぶか、「空洞ごとに選ぶ」をオンにしてください。'; el.classList.remove('warn'); return; }
     const c = scene.cavity;
-    if (c?.comps?.length && st.cavity.detect) { el.textContent = `閉じた空洞を ${c.comps.length} 個見つけました(判定の格子 横 ${fmt(c.cell, 3)} mm・光軸方向 ${fmt(c.cz, 3)} mm)。上の一覧で空洞ごとに媒質を選べます。断面図に液体・ガラスの空洞を色で表示します。`; el.classList.remove('warn'); }
+    const sealedDefault = (c?.comps ?? []).filter((x) => x.sealed && x.assign < 0 && st.cavity.material?.type !== 'air').length;
+    if (sealedDefault) { el.textContent = `空洞 ${c.comps.length} 個のうち ${sealedDefault} 個は、細い通路をふさいだことで閉じた空洞です(部品の縁と膜の間の隙間などを含むため、既定の媒質は入れず空気のままにしています)。液体を入れる空洞は「空洞ごとに選ぶ」で個別に選んでください。`; el.classList.add('warn'); }
+    else if (c?.comps?.length && st.cavity.detect) { el.textContent = `閉じた空洞を ${c.comps.length} 個見つけました(判定の格子 横 ${fmt(c.cell, 3)} mm・光軸方向 ${fmt(c.cz, 3)} mm)。上の一覧で空洞ごとに媒質を選べます。断面図に液体・ガラスの空洞を色で表示します。`; el.classList.remove('warn'); }
     else if (c?.entry) { el.textContent = `閉じた空洞を見つけました: 体積 ${fmt(c.volume, 1)} mm³(判定の格子 ${fmt(c.cell, 3)} mm)。断面図に媒質の色で表示しています。`; el.classList.remove('warn'); }
     else { el.textContent = '閉じた空洞が見つかりません。注入口などの細い通路で外とつながっている場合は「細い通路をふさぐ幅」をその通路の幅より少し大きくしてください。'; el.classList.add('warn'); }
   }
