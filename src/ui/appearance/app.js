@@ -9,7 +9,7 @@ import { tessellate, bounds, segmentEvaluator } from '../../appearance/profile.j
 import { COATINGS } from '../../appearance/thinfilm.js';
 import { ENV_PRESETS, defaultCamera, internalVisibility, cameraBasis } from '../../appearance/render.js';
 import { reflectanceVsAngle, reflectanceVsWavelength, lineProfile, boundaryContrast, contributionTable } from '../../appearance/analysis.js';
-import { buildTraceScene } from '../../appearance/nstrace.js';
+import { buildTraceScene, cavityAnchor } from '../../appearance/nstrace.js';
 import { listPresets, refractiveIndex } from '../../core/glass.js';
 import { parseNumber } from '../editor.js';
 import { createPool, createRenderView, renderStill, drawBuffer } from './render-view.js';
@@ -478,18 +478,22 @@ export function initAppearance({ getSystem, getState, setState, onLoadSystem }) 
     const comps = scene?.cavity?.comps ?? [];
     if (!st.cavity.detect || !comps.length) return;
     const assign = st.cavity.assign ?? (st.cavity.assign = []);
-    const findA = (c) => assign.findIndex((a) => Math.hypot(...a.at.map((v, k) => v - c.centroid[k])) < 0.5);
+    // どの空洞にどの指定が当たったかは追跡の計算(buildCavity)が決めた comps[].assign をそのまま使う(画面で別に判定しない)
     comps.forEach((c, n) => {
-      const ai = findA(c), cur = ai >= 0 ? assign[ai].material : null;
+      const cur = c.assign >= 0 ? assign[c.assign].material : null;
       box.append(h('div', { class: 'ap-cav-row' },
         h('span', {}, `空洞 ${n + 1}: ${fmt(c.volume, 1)} mm³、光軸方向 z ≈ ${fmt(c.centroid[2], 2)} mm`),
         mediumSelect(cur, (m) => {
-          const i = findA(c);
-          if (m === null) { if (i >= 0) assign.splice(i, 1); } else if (i >= 0) assign[i].material = m; else assign.push({ at: c.centroid.map((v) => +v.toFixed(4)), material: m });
+          if (c.assign >= 0) { if (m === null) assign.splice(c.assign, 1); else assign[c.assign].material = m; }
+          else if (m !== null) assign.push({ ...cavityAnchor(scene, c.seed), material: m });
           changed(true);
         }, true)));
     });
+    const lost = scene.cavity.unmatched ?? [];
+    if (lost.length) box.append(h('div', { class: 'warn' }, `空洞の媒質の指定のうち ${lost.length} 件が、どの空洞にも当たっていません(部品を動かしたか、形が変わったため)。`,
+      h('button', { type: 'button', class: 'secondary', onclick: () => { st.cavity.assign = assign.filter((_, i) => !lost.includes(i)); changed(true); } }, '当たっていない指定を消す')));
   }
+
   function showCavityInfo(scene) {
     const el = $('ap-cav-info');
     if (!el) return;

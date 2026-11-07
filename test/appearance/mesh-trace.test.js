@@ -166,3 +166,26 @@ test('two cavities separated by a 50 µm membrane get their own media (oil below
   const r = transmitPath(sc, [0.3, 0.2, -5], [0, 0, 1], 0.55);
   assert.equal(chain(r.events), `1.000>${nB} ${nB}>${nO} ${nO}>${nP} ${nP}>1.000 1.000>${nB} ${nB}>1.000`);
 });
+
+test('cavity media assigned via cavityAnchor follow the parts when they are moved; absolute points are reported as unmatched', async () => {
+  const { cavityAnchor } = await import('../../src/appearance/nstrace.js');
+  const pu = { type: 'model', nd: 1.5, vd: 50 };
+  const lid = { start: [0, 3.55], segments: [{ type: 'line', to: [6, 3.55] }, { type: 'line', to: [6, 3.05] }, { type: 'line', to: [10, 3.05] }, { type: 'line', to: [10, 5] }, { type: 'line', to: [0, 5] }, { type: 'line', to: [0, 3.55] }] };
+  const mk = (dz, dx) => [meshPart(revolveTris(cup, 64)), meshPart(revolveTris(rect(0, 10, 3, 3.05), 64), pu), meshPart(revolveTris(lid, 64))].map((p) => ({ ...p, offset: [dx, 0, dz] }));
+  const base = mk(0, 0), detect = { id: 'cav', kind: 'cavity', material: { type: 'air' }, detect: true, seal: 0 };
+  const s0 = buildTraceScene([...base, detect]);
+  const oilCav = s0.cavity.comps.find((c) => c.centroid[2] < 3);
+  const anchored = { ...cavityAnchor(s0, oilCav.seed), material: oil };
+  assert.ok(anchored.part, 'anchored to a part');
+  const absolute = { at: [...oilCav.seed], material: oil };
+  for (const [dz, dx] of [[0, 0], [7, 0], [0, 15], [-4, 6]]) {
+    // 部品をそれぞれ同じ量だけ動かす(STL の位置ダイアログと同じ)。部品の id は同じ
+    const moved = mk(dz, dx).map((p, i) => ({ ...p, id: base[i].id, mesh: base[i].mesh }));
+    const sc = buildTraceScene([...moved, { ...detect, assign: [anchored, absolute] }]);
+    const lower = sc.cavity.comps.find((c) => c.centroid[2] < 3 + dz), upper = sc.cavity.comps.find((c) => c.centroid[2] > 3 + dz);
+    assert.equal(lower.material, oil, `moved ${dz},${dx}`);
+    assert.equal(lower.assign, 0); // 画面が読む「どの指定が当たったか」も同じ
+    assert.equal(upper.material.type, 'air');
+    assert.deepEqual(sc.cavity.unmatched, [1]); // 絶対位置の指定は、動かす前は同じ空洞に重なり(先の指定が優先)、動かした後は外れる。どちらも使われない
+  }
+});

@@ -209,31 +209,47 @@ function buildCavity(scene, cavPart) {
     const id = info.length;
     comp[q] = id; stack.push(q);
     let n = 0, sz = 0, sx = 0, sy = 0;
+    const qi = q % nx, qj = ((q - qi) / nx) % ny, qk = Math.floor(q / (nx * ny));
+    const seed = [o[0] + (qi + 0.5) * cell, o[1] + (qj + 0.5) * cell, oz + (qk + 0.5) * cz]; // 空洞の中にある点(重心は曲がった空洞の外に出ることがある)
     while (stack.length) {
       const u = stack.pop(), i = u % nx, j = ((u - i) / nx) % ny, k = Math.floor(u / (nx * ny));
       n++; sx += i; sy += j; sz += k;
       const nb = [i > 0 ? u - 1 : -1, i < nx - 1 ? u + 1 : -1, j > 0 ? u - nx : -1, j < ny - 1 ? u + nx : -1, k > 0 ? u - nx * ny : -1, k < nz - 1 ? u + nx * ny : -1];
       for (const w of nb) if (w >= 0 && !G[w] && !seen[w] && comp[w] < 0) { comp[w] = id; stack.push(w); }
     }
-    info.push({ id, cells: n, centroid: [o[0] + (sx / n + 0.5) * cell, o[1] + (sy / n + 0.5) * cell, oz + (sz / n + 0.5) * cz] });
+    info.push({ id, cells: n, seed, centroid: [o[0] + (sx / n + 0.5) * cell, o[1] + (sy / n + 0.5) * cell, oz + (sz / n + 0.5) * cz] });
   }
   // 小さすぎる空洞は、縁の丸め・部品の合わせ目の隙間とみなして除く(最大の空洞の 0.5 % 未満かつ 1 mm³ 未満)
   const vcell = cell * cell * cz, vmax = Math.max(0, ...info.map((c) => c.cells)) * vcell;
   const real = info.filter((c) => c.cells * vcell >= Math.min(1, 0.005 * vmax) && c.cells * vcell > 1e-3).sort((a, b) => a.centroid[2] - b.centroid[2]);
-  // 空洞ごとの媒質: assign = [{at:[x,y,z], material}] はその点を含む空洞(なければ重心が 2 mm 以内で最も近い空洞)に、
-  // materials = {番号: material} は z 順の番号に。どちらもなければ既定の material
+  // 空洞ごとの媒質(判定はここだけで行い、画面もこの結果 comps[].assign を使う):
+  //   assign = [{part, local, material}] … 部品 part の位置(offset / zOffset)からの相対位置 local にある空洞。部品を動かすと一緒に動く
+  //            [{at, material}]          … シーンの絶対位置(古い保存データ)
+  //   その点を含む空洞(点が空洞の格子の上になければ、まわり 2 格子以内の空洞)に当てる。見つからない指定は使わない(画面で知らせる)
+  //   materials = {番号: material} は z 順の番号に。どれもなければ既定の material(完全に閉じた空洞だけ)
+  const byPart = new Map(scene.list.map((e) => [e.part.id, e.part]));
   const cellIdx = (x, y, z) => { const i = Math.floor((x - o[0]) / cell), j = Math.floor((y - o[1]) / cell), k = Math.floor((z - oz) / cz); return i < 0 || j < 0 || k < 0 || i >= nx || j >= ny || k >= nz ? -1 : idx(i, j, k); };
+  const realIndex = new Map(real.map((c, n) => [c.id, n]));
+  const compAtPoint = (p) => {
+    const q = cellIdx(...p);
+    if (q >= 0 && comp[q] >= 0 && realIndex.has(comp[q])) return realIndex.get(comp[q]);
+    for (let r = 1; r <= 2; r++) for (let dk = -r; dk <= r; dk++) for (let dj = -r; dj <= r; dj++) for (let di = -r; di <= r; di++) {
+      const w = cellIdx(p[0] + di * cell, p[1] + dj * cell, p[2] + dk * cz);
+      if (w >= 0 && comp[w] >= 0 && realIndex.has(comp[w])) return realIndex.get(comp[w]);
+    }
+    return -1;
+  };
   const assigned = new Map();
-  for (const a of cavPart.assign ?? []) {
-    let hit = -1;
-    const q = cellIdx(...a.at);
-    if (q >= 0 && comp[q] >= 0) hit = real.findIndex((c) => c.id === comp[q]);
-    if (hit < 0) { let bd = 2; real.forEach((c, n) => { const d = Math.hypot(...c.centroid.map((v, k) => v - a.at[k])); if (d < bd) { bd = d; hit = n; } }); }
-    if (hit >= 0) assigned.set(hit, a.material);
-  }
+  (cavPart.assign ?? []).forEach((a, ai) => {
+    const pt = assignPoint(a, byPart);
+    if (!pt) return;
+    const n = compAtPoint(pt);
+    if (n >= 0 && !assigned.has(n)) assigned.set(n, ai);
+  });
   const comps = real.map((c, n) => {
-    const mat = assigned.get(n) ?? cavPart.materials?.[n] ?? cavPart.material;
-    return { index: n, volume: c.cells * vcell, centroid: c.centroid, material: mat,
+    const ai = assigned.has(n) ? assigned.get(n) : -1;
+    const mat = ai >= 0 ? cavPart.assign[ai].material : cavPart.materials?.[n] ?? cavPart.material;
+    return { index: n, volume: c.cells * vcell, centroid: c.centroid, seed: c.seed, assign: ai, material: mat,
       entry: mat && mat.type !== 'air' ? { part: { id: `cavity${n}`, name: `空洞 ${n + 1}`, material: mat, coatings: {} }, kind: 'cavity' } : null };
   });
   const byId = new Map(real.map((c, n) => [c.id, comps[n]]));
@@ -246,7 +262,31 @@ function buildCavity(scene, cavPart) {
   const at = (x, y, z) => { const q = cellOf(x, y, z); return q < 0 ? 0 : G[q]; };
   const entryAt = (x, y, z) => { const q = cellOf(x, y, z); if (q < 0 || G[q] !== 2) return null; return byId.get(comp[q])?.entry ?? null; };
   const filled = comps.filter((c) => c.entry);
-  return { comps, entry: filled[0]?.entry ?? null, volume: filled.reduce((a, c) => a + c.volume, 0), cell, cz, at, entryAt, grid: { G, o, nx, ny, nz, cz } };
+  const used = new Set(comps.map((c) => c.assign).filter((x) => x >= 0));
+  const unmatched = (cavPart.assign ?? []).map((_, i) => i).filter((i) => !used.has(i));
+  return { comps, unmatched, entry: filled[0]?.entry ?? null, volume: filled.reduce((a, c) => a + c.volume, 0), cell, cz, at, entryAt, grid: { G, o, nx, ny, nz, cz } };
+}
+
+/** 部品の位置(STL は offset、回転体は zOffset) */
+const partOffset = (p) => (p.kind === 'mesh' ? p.offset ?? [0, 0, 0] : [0, 0, p.zOffset ?? 0]);
+/** 空洞の指定の点(シーン座標)。部品に結び付いた指定はその部品の今の位置から */
+function assignPoint(a, byPart) {
+  if (a.part !== undefined) { const p = byPart.get(a.part); if (!p) return null; const o = partOffset(p); return a.local.map((v, k) => v + o[k]); }
+  return a.at ?? null;
+}
+/**
+ * 空洞の中の点 p を、近くの部品に結び付けた指定に変える: {part, local}。
+ * 光軸方向(−z, +z)に光線を出して最初に当たった部品を基準にする(空洞を囲む部品なので、一緒に動けば空洞も一緒に動く)
+ */
+export function cavityAnchor(scene, p) {
+  let best = null;
+  for (const d of [[0, 0, -1], [0, 0, 1], [-1, 0, 0], [1, 0, 0]]) {
+    const h = intersect(scene, p, d);
+    if (h && h.primary.entry.part && h.primary.entry.kind !== 'cavity' && (!best || h.t < best.t)) best = { t: h.t, part: h.primary.entry.part };
+  }
+  if (!best) return { at: [...p] };
+  const o = partOffset(best.part);
+  return { part: best.part.id, local: p.map((v, k) => +(v - o[k]).toFixed(6)) };
 }
 
 /** 部品の外側の点 p(面の外向き法線 n)がある空洞の媒質(なければ null)。面に接する格子が部品側なら外へ少しずつ進めて調べる */
